@@ -92,3 +92,29 @@ async def test_audit_only_mode_allows_but_logs(tmp_path):
     assert result[0].text == "rm -rf /"
     log_text = audit_log.read_text()
     assert '"verdict": "warned"' in log_text
+
+
+@pytest.mark.asyncio
+async def test_build_mcp_server_wires_handlers(tmp_path):
+    proxy, _ = make_proxy(tmp_path)
+    async with proxy.connected():
+        mcp_server = proxy._build_mcp_server()
+        assert mcp_server.name == "agent-guard"
+
+        from mcp.types import ListToolsRequest, CallToolRequest
+
+        list_tools_handler = mcp_server.request_handlers[ListToolsRequest]
+        result = await list_tools_handler(ListToolsRequest(method="tools/list"))
+        tool_names = {t.name for t in result.root.tools}
+        assert "mock.echo" in tool_names
+        assert "mock.read_file" in tool_names
+
+        call_tool_handler = mcp_server.request_handlers[CallToolRequest]
+        result = await call_tool_handler(
+            CallToolRequest(
+                method="tools/call",
+                params={"name": "mock.echo", "arguments": {"text": "hello"}},
+            )
+        )
+        content = result.root.content
+        assert content[0].text == "hello"

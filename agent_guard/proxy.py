@@ -88,3 +88,30 @@ class AgentGuardProxy:
         )
 
         return [TextContent(type="text", text=post.result_for_agent)]
+
+    def _build_mcp_server(self):
+        """Construct an mcp.server.Server with handlers wired to this proxy's
+        list_tools/call_tool, without running it."""
+        from mcp.server import Server
+
+        server = Server("agent-guard")
+
+        @server.list_tools()
+        async def _list_tools() -> list[Tool]:
+            return await self.list_tools()
+
+        @server.call_tool()
+        async def _call_tool(name: str, arguments: dict) -> list[TextContent]:
+            return await self.call_tool(name, arguments)
+
+        return server
+
+    async def serve_stdio(self) -> None:
+        """Run Agent Guard as a stdio MCP server, exposing aggregated downstream
+        tools to an upstream MCP client. Each tools/call is routed through
+        self.call_tool (which applies the detection pipeline)."""
+        from mcp.server.stdio import stdio_server
+
+        server = self._build_mcp_server()
+        async with stdio_server() as (read, write):
+            await server.run(read, write, server.create_initialization_options())

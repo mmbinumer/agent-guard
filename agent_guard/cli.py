@@ -76,5 +76,35 @@ def kill(config_path: str) -> None:
     click.echo(f"kill_switch: true written to {config_path}")
 
 
+@main.command()
+@click.option("--config", "config_path", default="agent-guard.yaml", show_default=True)
+def run(config_path: str) -> None:
+    """Run Agent Guard as a stdio MCP proxy server."""
+    import asyncio
+    import uuid
+
+    from agent_guard.audit import AuditLogger
+    from agent_guard.config import load_config
+    from agent_guard.detectors.taint import TaintStore
+    from agent_guard.pipeline import Pipeline
+    from agent_guard.proxy import AgentGuardProxy
+
+    config = load_config(config_path)
+    audit_log_path = Path("~/.agent-guard/audit.log").expanduser()
+    logger = AuditLogger(audit_log_path)
+    taint_store = TaintStore(
+        max_value_bytes=config.limits.max_taint_value_bytes,
+        max_entries=config.limits.max_taint_entries,
+    )
+    pipeline = Pipeline(config=config, audit=logger, taint=taint_store, session_id=str(uuid.uuid4()))
+    proxy = AgentGuardProxy(config=config, pipeline=pipeline)
+
+    async def _run():
+        async with proxy.connected():
+            await proxy.serve_stdio()
+
+    asyncio.run(_run())
+
+
 if __name__ == "__main__":
     main()

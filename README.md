@@ -29,7 +29,9 @@ pip install agent-guard
 
 1. Copy `agent-guard.example.yaml` to `agent-guard.yaml` and list your
    downstream MCP servers under `servers:`.
-2. Point your MCP client at Agent Guard instead of your servers directly.
+2. Run `agent-guard run --config agent-guard.yaml` to start Agent Guard as a
+   stdio MCP proxy server, and point your MCP client (e.g. Claude Desktop) at
+   this running process instead of your servers directly.
 3. Run `agent-guard tail --no-follow` to see recent activity, or
    `agent-guard report` for a summary.
 4. If a legitimate call gets blocked, set `mode: audit-only` in
