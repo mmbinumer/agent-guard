@@ -21,8 +21,12 @@ risk score and verdict.
 
 ## Install
 
+Not yet published to PyPI. Install from source:
+
 ```bash
-pip install agent-guard
+git clone https://github.com/<org>/agent-guard
+cd agent-guard
+pip install -e .
 ```
 
 ## Quick start
