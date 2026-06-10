@@ -1,0 +1,28 @@
+servers:
+  - name: filesystem
+    command: ["mcp-server-filesystem", "/path/to/project"]
+  - name: slack
+    command: ["mcp-server-slack"]
+
+mode: enforce   # enforce | audit-only
+
+actions:
+  dangerous_command: block
+  secret_in_args: block
+  secret_in_output: redact     # redacted in audit log only; agent still sees raw output (see README)
+  taint_leak: block
+  prompt_injection_marker: warn  # tripwire only, see README
+
+taint:
+  sensitive_sources:
+    files: [".env", "*secret*", "*credentials*", "id_rsa*"]
+    db_tables: ["users", "customers"]
+  external_sinks:
+    tools: ["http.*", "email.*", "slack.*", "*send*"]
+
+limits:
+  max_scan_bytes: 262144
+  max_taint_value_bytes: 512
+  max_taint_entries: 1000
+
+kill_switch: false
