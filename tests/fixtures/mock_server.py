@@ -43,6 +43,11 @@ async def list_tools() -> list[Tool]:
                 "required": ["path"],
             },
         ),
+        Tool(
+            name="multi_block",
+            description="Return multiple text blocks",
+            inputSchema={"type": "object", "properties": {}},
+        ),
     ]
 
 
@@ -53,6 +58,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if name == "read_file":
         content = _FILES.get(arguments["path"], "")
         return [TextContent(type="text", text=content)]
+    if name == "multi_block":
+        return [
+            TextContent(type="text", text="first"),
+            TextContent(type="text", text="second"),
+            TextContent(type="text", text="third"),
+        ]
     raise ValueError(f"Unknown tool: {name}")
 
 

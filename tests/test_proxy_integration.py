@@ -95,6 +95,15 @@ async def test_audit_only_mode_allows_but_logs(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_multi_block_result_preserves_all_blocks(tmp_path):
+    proxy, _ = make_proxy(tmp_path)
+    async with proxy.connected():
+        result = await proxy.call_tool("mock.multi_block", {})
+
+    assert [block.text for block in result] == ["first", "second", "third"]
+
+
+@pytest.mark.asyncio
 async def test_build_mcp_server_wires_handlers(tmp_path):
     proxy, _ = make_proxy(tmp_path)
     async with proxy.connected():

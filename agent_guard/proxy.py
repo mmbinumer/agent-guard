@@ -86,15 +86,17 @@ class AgentGuardProxy:
             )
             raise
 
-        text_result = "".join(
+        # Extract text for scanning, but return the original content blocks
+        # so non-text content (images, embedded resources) isn't dropped.
+        text_for_scan = "".join(
             block.text for block in result.content if isinstance(block, TextContent)
         )
 
-        post = self.pipeline.post_call(
-            server=server_name, tool=qualified_name, args=arguments, result=text_result,
+        self.pipeline.post_call(
+            server=server_name, tool=qualified_name, args=arguments, result=text_for_scan,
         )
 
-        return [TextContent(type="text", text=post.result_for_agent)]
+        return list(result.content)
 
     def _build_mcp_server(self):
         """Construct an mcp.server.Server with handlers wired to this proxy's

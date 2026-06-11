@@ -17,7 +17,8 @@ MCP servers, inspecting every tool call for:
   Limitations below).
 
 Every tool call is logged to `~/.agent-guard/audit.log` as JSONL with a
-risk score and verdict.
+risk score and verdict. The log is safe for concurrent writers (cross-process
+file lock) and rotates at 50 MB to one prior file (`audit.log.1`).
 
 ## Install
 
