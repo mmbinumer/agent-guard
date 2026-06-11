@@ -1,8 +1,8 @@
 servers:
   - name: filesystem
-    command: ["mcp-server-filesystem", "/path/to/project"]
+    command: ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/path/to/project"]
   - name: slack
-    command: ["mcp-server-slack"]
+    command: ["npx", "-y", "@modelcontextprotocol/server-slack"]
 
 mode: enforce   # enforce | audit-only
 
