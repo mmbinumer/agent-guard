@@ -59,17 +59,24 @@ class AgentGuardProxy:
         for server_name, server in self._servers.items():
             for tool in server.tools:
                 aggregated.append(Tool(
-                    name=f"{server_name}.{tool.name}",
+                    name=f"{server_name}__{tool.name}",
                     description=tool.description,
                     inputSchema=tool.inputSchema,
                 ))
         return aggregated
 
     def _resolve(self, qualified_name: str) -> tuple[str, str]:
-        server_name, _, tool_name = qualified_name.partition(".")
-        if server_name not in self._servers or not tool_name:
-            raise ValueError(f"Unknown tool: {qualified_name}")
-        return server_name, tool_name
+        # Tool names must match ^[a-zA-Z0-9_-]{1,64}$ for MCP clients (no
+        # dots), so server and tool name are joined with "__". Match against
+        # known server names rather than splitting blindly, since either
+        # part may itself contain underscores.
+        for server_name in self._servers:
+            prefix = f"{server_name}__"
+            if qualified_name.startswith(prefix):
+                tool_name = qualified_name[len(prefix):]
+                if tool_name:
+                    return server_name, tool_name
+        raise ValueError(f"Unknown tool: {qualified_name}")
 
     async def call_tool(self, qualified_name: str, arguments: dict) -> list[TextContent]:
         server_name, tool_name = self._resolve(qualified_name)

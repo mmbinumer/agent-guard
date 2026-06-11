@@ -24,7 +24,7 @@ def make_proxy(tmp_path, mode="enforce"):
         },
         "taint": {
             "sensitive_sources": {"files": [".env"], "db_tables": []},
-            "external_sinks": {"tools": ["mock.echo"]},
+            "external_sinks": {"tools": ["mock__echo"]},
         },
         "limits": {"max_scan_bytes": 4096, "max_taint_value_bytes": 512, "max_taint_entries": 1000},
         "kill_switch": False,
@@ -47,15 +47,15 @@ async def test_list_tools_aggregates_with_server_prefix(tmp_path):
         tools = await proxy.list_tools()
 
     names = {t.name for t in tools}
-    assert "mock.echo" in names
-    assert "mock.read_file" in names
+    assert "mock__echo" in names
+    assert "mock__read_file" in names
 
 
 @pytest.mark.asyncio
 async def test_safe_call_passes_through(tmp_path):
     proxy, audit_log = make_proxy(tmp_path)
     async with proxy.connected():
-        result = await proxy.call_tool("mock.echo", {"text": "hello"})
+        result = await proxy.call_tool("mock__echo", {"text": "hello"})
 
     assert result[0].text == "hello"
 
@@ -65,7 +65,7 @@ async def test_dangerous_call_blocked(tmp_path):
     proxy, audit_log = make_proxy(tmp_path)
     async with proxy.connected():
         with pytest.raises(Exception):
-            await proxy.call_tool("mock.echo", {"text": "rm -rf /"})
+            await proxy.call_tool("mock__echo", {"text": "rm -rf /"})
 
 
 @pytest.mark.asyncio
@@ -73,12 +73,12 @@ async def test_taint_leak_blocked_end_to_end(tmp_path):
     proxy, audit_log = make_proxy(tmp_path)
     async with proxy.connected():
         # Read the sensitive file -> tags taint store with the secret inside
-        await proxy.call_tool("mock.read_file", {"path": ".env"})
+        await proxy.call_tool("mock__read_file", {"path": ".env"})
 
         # Try to echo (configured as a sink) the leaked secret
         with pytest.raises(Exception):
             await proxy.call_tool(
-                "mock.echo",
+                "mock__echo",
                 {"text": "the key is sk-leakedvalue1234567890abcdefghijkl"},
             )
 
@@ -87,7 +87,7 @@ async def test_taint_leak_blocked_end_to_end(tmp_path):
 async def test_audit_only_mode_allows_but_logs(tmp_path):
     proxy, audit_log = make_proxy(tmp_path, mode="audit-only")
     async with proxy.connected():
-        result = await proxy.call_tool("mock.echo", {"text": "rm -rf /"})
+        result = await proxy.call_tool("mock__echo", {"text": "rm -rf /"})
 
     assert result[0].text == "rm -rf /"
     log_text = audit_log.read_text()
@@ -98,7 +98,7 @@ async def test_audit_only_mode_allows_but_logs(tmp_path):
 async def test_multi_block_result_preserves_all_blocks(tmp_path):
     proxy, _ = make_proxy(tmp_path)
     async with proxy.connected():
-        result = await proxy.call_tool("mock.multi_block", {})
+        result = await proxy.call_tool("mock__multi_block", {})
 
     assert [block.text for block in result] == ["first", "second", "third"]
 
@@ -115,14 +115,14 @@ async def test_build_mcp_server_wires_handlers(tmp_path):
         list_tools_handler = mcp_server.request_handlers[ListToolsRequest]
         result = await list_tools_handler(ListToolsRequest(method="tools/list"))
         tool_names = {t.name for t in result.root.tools}
-        assert "mock.echo" in tool_names
-        assert "mock.read_file" in tool_names
+        assert "mock__echo" in tool_names
+        assert "mock__read_file" in tool_names
 
         call_tool_handler = mcp_server.request_handlers[CallToolRequest]
         result = await call_tool_handler(
             CallToolRequest(
                 method="tools/call",
-                params={"name": "mock.echo", "arguments": {"text": "hello"}},
+                params={"name": "mock__echo", "arguments": {"text": "hello"}},
             )
         )
         content = result.root.content

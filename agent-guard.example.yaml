@@ -17,8 +17,11 @@ taint:
   sensitive_sources:
     files: [".env", "*secret*", "*credentials*", "id_rsa*"]
     db_tables: ["users", "customers"]
+  # Tool names are exposed as "<server>__<tool>" (e.g. "slack__post_message"),
+  # so sink patterns should match that form. "*send*"/"*post*" style wildcards
+  # work regardless of which server they come from.
   external_sinks:
-    tools: ["http.*", "email.*", "slack.*", "*send*"]
+    tools: ["http__*", "email__*", "slack__*", "*send*", "*post*"]
 
 limits:
   max_scan_bytes: 262144
