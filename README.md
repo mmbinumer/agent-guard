@@ -48,6 +48,21 @@ pip install -e .
    `agent-guard.yaml` to downgrade all blocks to warnings while you tune the
    config, or run `agent-guard kill` to halt everything immediately.
 
+## Examples
+
+`examples/verdict_demos.py` runs Agent Guard in-process against a real
+`@modelcontextprotocol/server-filesystem`, scoped to a temp directory, and
+walks through all four verdicts (`allowed`, `warned`, `blocked` for a
+credential in args, `blocked` for a taint leak), printing the resulting
+audit log:
+
+```bash
+pip install -e .
+python examples/verdict_demos.py
+```
+
+Requires Node.js (`npx`) on `PATH`.
+
 ## Configuration
 
 See `agent-guard.example.yaml` for the full schema: per-detection actions
