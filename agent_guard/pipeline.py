@@ -32,6 +32,18 @@ def _result_to_text(result: Any) -> str:
     return result if isinstance(result, str) else json.dumps(result, default=str)
 
 
+def _arg_string_values(args: dict) -> list[str]:
+    return [v for v in args.values() if isinstance(v, str)]
+
+
+def _redact(text: str, values: list[str]) -> str:
+    # Replace longest values first so a shorter substring doesn't pre-empt a
+    # longer secret. Empty strings are skipped to avoid an infinite expansion.
+    for v in sorted({v for v in values if v}, key=len, reverse=True):
+        text = text.replace(v, "[REDACTED]")
+    return text
+
+
 def _risk_score(detections: list[dict]) -> str:
     if any(d["action"] in ("block",) for d in detections):
         return "high"
@@ -94,8 +106,9 @@ class Pipeline:
 
     def pre_call(self, server: str, tool: str, args: dict) -> PreCallDecision:
         if self.config.kill_switch:
+            # Args may contain secrets; don't echo them when we didn't scan.
             self._log(
-                tool, server, _args_to_text(args)[:200],
+                tool, server, "",
                 [{"type": "kill_switch", "rule": "global", "action": "block"}],
                 verdict="blocked", scan_skipped=None,
             )
@@ -104,6 +117,7 @@ class Pipeline:
         text = _args_to_text(args)
         scan_skipped = None
         detections: list[dict] = []
+        sensitive_values: list[str] = []
 
         for cmd in find_dangerous_commands(text):
             detections.append({
@@ -121,15 +135,18 @@ class Pipeline:
                         "matched_source": match["source"],
                         "action": self._resolve_action("taint_leak"),
                     })
+                    sensitive_values.append(match["value"])
 
-            for _secret in find_secrets(text):
+            for secret in find_secrets(text):
                 detections.append({
                     "type": "secret_in_args", "rule": "secret_patterns",
                     "matched": "[REDACTED]", "action": self._resolve_action("secret_in_args"),
                 })
+                sensitive_values.append(secret)
 
         verdict, allowed = self._verdict_for(detections)
-        self._log(tool, server, text[:200], detections, verdict, scan_skipped)
+        safe_summary = _redact(text, sensitive_values)[:200]
+        self._log(tool, server, safe_summary, detections, verdict, scan_skipped)
 
         return PreCallDecision(
             allowed=allowed,
@@ -158,27 +175,45 @@ class Pipeline:
                     "matched": marker, "action": self._resolve_action("prompt_injection_marker"),
                 })
 
-        # Taint tagging: if this read came from a sensitive source, tag values
+        # Taint tagging: if this read came from a sensitive source, tag values.
+        # We match every string arg value against the configured source patterns
+        # so we don't depend on a tool naming the arg `path` or `table`.
+        arg_string_values = _arg_string_values(args)
         for path_or_table in (
             self.config.taint.sensitive_sources.files
             + self.config.taint.sensitive_sources.db_tables
         ):
-            if (
-                TaintStore.is_sensitive_source(str(args.get("path", "")), [path_or_table])
-                or TaintStore.is_sensitive_source(str(args.get("table", "")), [path_or_table])
+            if any(
+                TaintStore.is_sensitive_source(v, [path_or_table])
+                for v in arg_string_values
             ):
                 source_label = f"{server}:{path_or_table}"
                 if scan_skipped:
                     pass  # oversized: don't tag, per size-cap policy
                 elif secrets_found:
                     self.taint.tag(source=source_label, values=secrets_found)
-                elif len(text.encode("utf-8")) <= 512:
+                elif len(text.encode("utf-8")) <= self.config.limits.max_taint_value_bytes:
                     self.taint.tag(source=source_label, values=[text])
 
         verdict, _allowed = self._verdict_for(detections)
         self._log(tool, server, "[output]", detections, verdict, scan_skipped)
 
         return PostCallDecision(result_for_agent=result, detections=detections)
+
+    def record_downstream_error(self, server: str, tool: str, error: BaseException) -> None:
+        """Log an audit event when the downstream MCP server raises during a
+        call we already authorized. Without this, the audit log shows the
+        pre-call event but no resolution."""
+        self._log(
+            tool, server, "",
+            [{
+                "type": "downstream_error", "rule": "transport",
+                "matched": f"{type(error).__name__}: {error}"[:200],
+                "action": "warn",
+            }],
+            verdict="error",
+            scan_skipped=None,
+        )
 
     def _verdict_for(self, detections: list[dict]) -> tuple[str, bool]:
         if not detections:

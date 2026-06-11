@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
-Verdict = Literal["allowed", "blocked", "warned"]
+Verdict = Literal["allowed", "blocked", "warned", "error"]
 RiskScore = Literal["low", "medium", "high"]
 
 

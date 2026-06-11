@@ -154,3 +154,101 @@ def test_oversized_payload_skips_scan(tmp_path):
     assert decision.allowed is True
     record = last_log_record(audit_log)
     assert record["scan_skipped"] == "size_limit"
+
+
+def test_args_summary_redacts_secret_in_args(tmp_path):
+    pipeline, audit_log = make_pipeline(tmp_path)
+
+    pipeline.pre_call(
+        server="fs", tool="http.post",
+        args={"body": "key=AKIAIOSFODNN7EXAMPLE"},
+    )
+
+    log_text = audit_log.read_text()
+    assert "AKIAIOSFODNN7EXAMPLE" not in log_text
+    assert "[REDACTED]" in log_text
+
+
+def test_args_summary_redacts_taint_leak(tmp_path):
+    pipeline, audit_log = make_pipeline(tmp_path)
+
+    # Tag a sensitive value via a sensitive source read
+    pipeline.post_call(
+        server="fs", tool="fs.read_file", args={"path": ".env"},
+        result="API_KEY=sk-leakedvalue1234567890abcdefghijkl",
+    )
+
+    pipeline.pre_call(
+        server="fs", tool="slack.post_message",
+        args={"body": "leaked sk-leakedvalue1234567890abcdefghijkl"},
+    )
+
+    log_text = audit_log.read_text()
+    assert "sk-leakedvalue1234567890abcdefghijkl" not in log_text
+
+
+def test_kill_switch_does_not_echo_args(tmp_path):
+    pipeline, audit_log = make_pipeline(tmp_path, kill_switch=True)
+
+    pipeline.pre_call(
+        server="fs", tool="http.post",
+        args={"body": "AKIAIOSFODNN7EXAMPLE"},
+    )
+
+    log_text = audit_log.read_text()
+    assert "AKIAIOSFODNN7EXAMPLE" not in log_text
+
+
+def test_taint_tagging_uses_arbitrary_arg_key(tmp_path):
+    pipeline, audit_log = make_pipeline(tmp_path)
+
+    # Tool uses `file_path` instead of `path` (e.g. some MCP filesystem servers)
+    pipeline.post_call(
+        server="fs", tool="fs.read", args={"file_path": ".env"},
+        result="API_KEY=sk-leakedvalue1234567890abcdefghijkl",
+    )
+
+    decision = pipeline.pre_call(
+        server="fs", tool="slack.post_message",
+        args={"body": "the key is sk-leakedvalue1234567890abcdefghijkl"},
+    )
+
+    assert decision.allowed is False
+    record = last_log_record(audit_log)
+    assert record["detections"][0]["type"] == "taint_leak"
+
+
+def test_post_call_tag_respects_max_taint_value_bytes_config(tmp_path):
+    # max_taint_value_bytes=8 means a result of 16 bytes should not be small-tagged
+    pipeline, audit_log = make_pipeline(
+        tmp_path,
+        limits={"max_scan_bytes": 1024, "max_taint_value_bytes": 8, "max_taint_entries": 1000},
+    )
+
+    # Small result, no secret-pattern match, but > 8 bytes -> should NOT be tagged
+    pipeline.post_call(
+        server="fs", tool="fs.read", args={"path": ".env"},
+        result="verysmallplaintext",  # 18 bytes, no secret pattern
+    )
+
+    decision = pipeline.pre_call(
+        server="fs", tool="slack.post_message",
+        args={"body": "carrying verysmallplaintext along"},
+    )
+
+    # Not blocked because the value was not tagged (exceeds 8-byte cap)
+    assert decision.allowed is True
+
+
+def test_downstream_error_logged(tmp_path):
+    pipeline, audit_log = make_pipeline(tmp_path)
+
+    pipeline.record_downstream_error(
+        server="fs", tool="fs.read",
+        error=RuntimeError("connection reset"),
+    )
+
+    record = last_log_record(audit_log)
+    assert record["verdict"] == "error"
+    assert record["detections"][0]["type"] == "downstream_error"
+    assert "connection reset" in record["detections"][0]["matched"]

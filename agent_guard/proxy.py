@@ -78,7 +78,14 @@ class AgentGuardProxy:
         if not decision.allowed:
             raise BlockedCallError(f"Blocked by Agent Guard: {decision.reason}")
 
-        result = await self._servers[server_name].session.call_tool(tool_name, arguments)
+        try:
+            result = await self._servers[server_name].session.call_tool(tool_name, arguments)
+        except Exception as exc:
+            self.pipeline.record_downstream_error(
+                server=server_name, tool=qualified_name, error=exc,
+            )
+            raise
+
         text_result = "".join(
             block.text for block in result.content if isinstance(block, TextContent)
         )
