@@ -25,10 +25,15 @@ file lock) and rotates at 50 MB to one prior file (`audit.log.1`).
 Not yet published to PyPI. Install from source:
 
 ```bash
-git clone https://github.com/<org>/agent-guard
+git clone https://github.com/mmbinumer/agent-guard
 cd agent-guard
 pip install -e .
 ```
+
+> **Windows note:** if `agent-guard` isn't found after install, pip installed
+> the script to a `Scripts` directory that isn't on your `PATH` (pip will
+> print a warning showing the path). Add that directory to your `PATH` and
+> open a new terminal, or invoke it as `python -m agent_guard <command>`.
 
 ## Quick start
 
