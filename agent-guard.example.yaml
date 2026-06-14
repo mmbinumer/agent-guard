@@ -12,6 +12,8 @@ actions:
   secret_in_output: redact     # redacted in audit log only; agent still sees raw output (see README)
   taint_leak: block
   prompt_injection_marker: warn  # tripwire only, see README
+  path_traversal: warn           # tripwire on inbound args (encoded ../, null bytes, /etc/passwd, etc.)
+  sql_injection: warn            # tripwire on inbound args (tautologies, stacked queries, UNION SELECT)
 
 taint:
   sensitive_sources:

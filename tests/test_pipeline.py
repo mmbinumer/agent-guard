@@ -81,6 +81,68 @@ def test_safe_call_allowed(tmp_path):
     assert record["risk_score"] == "low"
 
 
+def test_path_traversal_warned_not_blocked(tmp_path):
+    pipeline, audit_log = make_pipeline(tmp_path)
+
+    decision = pipeline.pre_call(
+        server="fs", tool="fs.read_file",
+        args={"path": "..%2f..%2fetc/passwd"},
+    )
+
+    # warn is the default action - logged but the call still proceeds.
+    assert decision.allowed is True
+    record = last_log_record(audit_log)
+    assert record["verdict"] == "warned"
+    assert any(d["type"] == "path_traversal" for d in record["detections"])
+
+
+def test_sql_injection_warned_not_blocked(tmp_path):
+    pipeline, audit_log = make_pipeline(tmp_path)
+
+    decision = pipeline.pre_call(
+        server="db", tool="db.query",
+        args={"sql": "SELECT * FROM users WHERE name = '' OR '1'='1'"},
+    )
+
+    assert decision.allowed is True
+    record = last_log_record(audit_log)
+    assert record["verdict"] == "warned"
+    assert any(d["type"] == "sql_injection" for d in record["detections"])
+
+
+def test_path_traversal_blocks_when_configured(tmp_path):
+    pipeline, audit_log = make_pipeline(tmp_path, actions={
+        "dangerous_command": "block",
+        "secret_in_args": "block",
+        "secret_in_output": "redact",
+        "taint_leak": "block",
+        "prompt_injection_marker": "warn",
+        "path_traversal": "block",
+    })
+
+    decision = pipeline.pre_call(
+        server="fs", tool="fs.read_file",
+        args={"path": "../../../../etc/shadow"},
+    )
+
+    assert decision.allowed is False
+    record = last_log_record(audit_log)
+    assert record["verdict"] == "blocked"
+    assert any(d["type"] == "path_traversal" for d in record["detections"])
+
+
+def test_benign_path_arg_not_flagged(tmp_path):
+    pipeline, audit_log = make_pipeline(tmp_path)
+
+    decision = pipeline.pre_call(
+        server="fs", tool="fs.read_file", args={"path": "../src/index.ts"}
+    )
+
+    assert decision.allowed is True
+    record = last_log_record(audit_log)
+    assert record["verdict"] == "allowed"
+
+
 def test_taint_tagging_then_leak_blocked(tmp_path):
     pipeline, audit_log = make_pipeline(tmp_path)
 

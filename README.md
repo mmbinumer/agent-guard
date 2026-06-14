@@ -10,6 +10,10 @@ MCP servers, inspecting every tool call for:
   is checked too).
 - **Dangerous commands** - `rm -rf`, `curl | sh`, destructive SQL without a
   `WHERE` clause, `chmod 777`, etc.
+- **Malicious inbound args** - heuristic tripwires (warn by default) for
+  path traversal (encoded `../`, null bytes, `/etc/passwd`-style targets) and
+  SQL injection (tautologies, stacked queries, `UNION SELECT`) in tool call
+  arguments. Tripwires, not guarantees - see Limitations.
 - **Accidental data exfiltration (taint tracking)** - if an agent reads a
   sensitive file (e.g. `.env`) and a value from it later appears in a call to
   an external-facing tool (HTTP, email, Slack), the call is blocked.
@@ -63,6 +67,26 @@ python examples/verdict_demos.py
 
 Requires Node.js (`npx`) on `PATH`.
 
+## Detections
+
+Each detection has a configurable action (`block` / `redact` / `warn` /
+`allow`). Defaults below; override any of them under `actions:` in your config.
+
+| Detection | Catches | Phase | Default |
+|---|---|---|---|
+| `dangerous_command` | `rm -rf`, `curl \| sh`, `chmod 777`, destructive SQL (`DROP`/`DELETE`/`UPDATE` without `WHERE`) | pre-call args | `block` |
+| `secret_in_args` | API keys, AWS creds, tokens, private keys in args (+1 level base64/hex) | pre-call args | `block` |
+| `path_traversal` | encoded `../`, null bytes, deep climbs (`../../../`), sensitive targets (`/etc/passwd`, `.ssh/`) | pre-call args | `warn` |
+| `sql_injection` | tautologies (`' OR '1'='1`), stacked queries (`'; DROP`), `UNION SELECT`, comment terminators | pre-call args | `warn` |
+| `taint_leak` | a value read from a sensitive source reappearing in a call to an external sink | pre-call args | `block` |
+| `secret_in_output` | secrets in tool results (redacted in audit log only) | post-call result | `redact` |
+| `prompt_injection_marker` | verbatim phrases like "ignore previous instructions" in results | post-call result | `warn` |
+
+`path_traversal`, `sql_injection`, and `prompt_injection_marker` are
+heuristic tripwires (see Limitations). They default to `warn` so they surface
+suspicious activity in the audit log without blocking legitimate calls while
+you tune. Set them to `block` once you trust them for your workload.
+
 ## Configuration
 
 See `agent-guard.example.yaml` for the full schema: per-detection actions
@@ -83,6 +107,12 @@ and the global kill switch.
 - **Taint tracking matches exact values (plus one level of base64/hex
   decoding)**. An agent that paraphrases a secret or applies further
   encoding will not be caught.
+- **The path-traversal and SQL-injection checks are tripwires, not
+  validators.** They match known-suspicious patterns in tool call args
+  (encoded traversal, tautologies, etc.) and default to `warn`. They scan
+  top-level string args only, won't catch novel/obfuscated payloads, and are
+  no substitute for the downstream server doing real input validation and
+  parameterized queries.
 - **The config file is not tamper-proof.** Anyone with filesystem access to
   `agent-guard.yaml` can disable detections or flip the kill switch. This is
   not a hardened security boundary in v1.

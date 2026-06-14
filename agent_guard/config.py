@@ -21,6 +21,9 @@ class ActionsConfig(BaseModel):
     secret_in_output: Action = "redact"
     taint_leak: Action = "block"
     prompt_injection_marker: Action = "warn"
+    # Heuristic tripwires on inbound args - warn by default (false-positive prone).
+    path_traversal: Action = "warn"
+    sql_injection: Action = "warn"
 
 
 class SensitiveSources(BaseModel):

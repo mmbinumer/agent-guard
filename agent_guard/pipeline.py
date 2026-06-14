@@ -6,7 +6,11 @@ from typing import Any
 
 from agent_guard.audit import AuditEvent, AuditLogger
 from agent_guard.config import AgentGuardConfig
-from agent_guard.detectors.dangerous import find_dangerous_commands
+from agent_guard.detectors.dangerous import (
+    find_dangerous_commands,
+    find_path_traversal,
+    find_sql_injection,
+)
 from agent_guard.detectors.injection import find_injection_markers
 from agent_guard.detectors.secrets import find_secrets
 from agent_guard.detectors.taint import TaintStore
@@ -124,6 +128,20 @@ class Pipeline:
                 "type": "dangerous_command", "rule": "dangerous_patterns",
                 "matched": cmd, "action": self._resolve_action("dangerous_command"),
             })
+
+        # Heuristic arg tripwires: scan each string value (not the JSON blob) to
+        # avoid escaping artifacts and cross-arg false matches.
+        for value in _arg_string_values(args):
+            for rule, matched in find_path_traversal(value):
+                detections.append({
+                    "type": "path_traversal", "rule": rule,
+                    "matched": matched[:120], "action": self._resolve_action("path_traversal"),
+                })
+            for rule, matched in find_sql_injection(value):
+                detections.append({
+                    "type": "sql_injection", "rule": rule,
+                    "matched": matched[:120], "action": self._resolve_action("sql_injection"),
+                })
 
         if len(text.encode("utf-8")) > self.config.limits.max_scan_bytes:
             scan_skipped = "size_limit"
