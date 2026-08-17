@@ -42,6 +42,17 @@ def last_log_record(audit_log):
     return json.loads(lines[-1])
 
 
+def last_call_record(audit_log):
+    """Last record for an actual tool call, skipping the one-shot
+    `taint_store_truncated` bookkeeping event the pipeline appends."""
+    records = [json.loads(line) for line in audit_log.read_text().strip().splitlines()]
+    for record in reversed(records):
+        types = [d.get("type") for d in record["detections"]]
+        if types != ["taint_store_truncated"]:
+            return record
+    raise AssertionError("no tool-call record found in audit log")
+
+
 def test_dangerous_command_blocked(tmp_path):
     pipeline, audit_log = make_pipeline(tmp_path)
 
@@ -161,6 +172,112 @@ def test_taint_tagging_then_leak_blocked(tmp_path):
     assert decision.allowed is False
     record = last_log_record(audit_log)
     assert record["detections"][0]["type"] == "taint_leak"
+
+
+def test_sink_call_after_eviction_warns_unknown(tmp_path):
+    # Evidence aged out of the taint store, so a clean scan is not proof the
+    # call is clean. The proxy must degrade to a stricter posture, not silently
+    # treat the outbound call as safe.
+    pipeline, audit_log = make_pipeline(tmp_path, limits={
+        "max_scan_bytes": 1024, "max_taint_value_bytes": 512, "max_taint_entries": 1,
+    })
+
+    pipeline.taint.tag(source="fs:.env", values=["first-secret-aaaaaaaaaaaa"])
+    pipeline.taint.tag(source="fs:.env2", values=["second-secret-bbbbbbbbbb"])
+    assert pipeline.taint.truncated is True
+
+    decision = pipeline.pre_call(
+        server="slack", tool="slack.post_message", args={"body": "nothing suspicious here"},
+    )
+
+    assert decision.allowed is True
+    record = last_call_record(audit_log)
+    assert record["verdict"] == "warned"
+    assert any(d["type"] == "taint_unknown" for d in record["detections"])
+
+
+def test_sink_call_after_eviction_blocks_when_configured(tmp_path):
+    pipeline, audit_log = make_pipeline(
+        tmp_path,
+        actions={
+            "dangerous_command": "block",
+            "secret_in_args": "block",
+            "secret_in_output": "redact",
+            "taint_leak": "block",
+            "prompt_injection_marker": "warn",
+            "taint_unknown": "block",
+        },
+        limits={"max_scan_bytes": 1024, "max_taint_value_bytes": 512, "max_taint_entries": 1},
+    )
+
+    pipeline.taint.tag(source="fs:.env", values=["first-secret-aaaaaaaaaaaa"])
+    pipeline.taint.tag(source="fs:.env2", values=["second-secret-bbbbbbbbbb"])
+
+    decision = pipeline.pre_call(
+        server="slack", tool="slack.post_message", args={"body": "nothing suspicious here"},
+    )
+
+    assert decision.allowed is False
+    record = last_call_record(audit_log)
+    assert record["verdict"] == "blocked"
+    assert any(d["type"] == "taint_unknown" for d in record["detections"])
+
+
+def test_sink_call_without_eviction_stays_clean(tmp_path):
+    # No eviction has happened, so a clean scan really is clean - must not
+    # fire taint_unknown and degrade every sink call.
+    pipeline, audit_log = make_pipeline(tmp_path)
+
+    pipeline.taint.tag(source="fs:.env", values=["first-secret-aaaaaaaaaaaa"])
+    assert pipeline.taint.truncated is False
+
+    decision = pipeline.pre_call(
+        server="slack", tool="slack.post_message", args={"body": "nothing suspicious here"},
+    )
+
+    assert decision.allowed is True
+    record = last_call_record(audit_log)
+    assert record["verdict"] == "allowed"
+    assert not any(d["type"] == "taint_unknown" for d in record["detections"])
+
+
+def test_non_sink_call_after_eviction_not_flagged(tmp_path):
+    # Eviction only matters for calls that could exfiltrate.
+    pipeline, audit_log = make_pipeline(tmp_path, limits={
+        "max_scan_bytes": 1024, "max_taint_value_bytes": 512, "max_taint_entries": 1,
+    })
+
+    pipeline.taint.tag(source="fs:.env", values=["first-secret-aaaaaaaaaaaa"])
+    pipeline.taint.tag(source="fs:.env2", values=["second-secret-bbbbbbbbbb"])
+
+    decision = pipeline.pre_call(
+        server="fs", tool="fs.read_file", args={"path": "README.md"},
+    )
+
+    assert decision.allowed is True
+    assert not any(
+        d["type"] == "taint_unknown" for d in last_call_record(audit_log)["detections"]
+    )
+
+
+def test_confirmed_leak_does_not_also_report_unknown(tmp_path):
+    # A positive match is the stronger signal; don't double-report.
+    pipeline, audit_log = make_pipeline(tmp_path, limits={
+        "max_scan_bytes": 1024, "max_taint_value_bytes": 512, "max_taint_entries": 1,
+    })
+
+    pipeline.taint.tag(source="fs:.env", values=["first-secret-aaaaaaaaaaaa"])
+    pipeline.taint.tag(source="fs:.env2", values=["second-secret-bbbbbbbbbb"])
+
+    decision = pipeline.pre_call(
+        server="slack", tool="slack.post_message",
+        args={"body": "leaking second-secret-bbbbbbbbbb now"},
+    )
+
+    assert decision.allowed is False
+    types = [d["type"] for d in last_call_record(audit_log)["detections"]]
+    assert "taint_leak" in types
+    assert "taint_unknown" not in types
 
 
 def test_secret_in_output_redacted_in_log_only(tmp_path):

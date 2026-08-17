@@ -79,6 +79,7 @@ Each detection has a configurable action (`block` / `redact` / `warn` /
 | `path_traversal` | encoded `../`, null bytes, deep climbs (`../../../`), sensitive targets (`/etc/passwd`, `.ssh/`) | pre-call args | `warn` |
 | `sql_injection` | tautologies (`' OR '1'='1`), stacked queries (`'; DROP`), `UNION SELECT`, comment terminators | pre-call args | `warn` |
 | `taint_leak` | a value read from a sensitive source reappearing in a call to an external sink | pre-call args | `block` |
+| `taint_unknown` | a sink call scanned clean *after* taint evidence was evicted, so the result isn't conclusive | pre-call args | `warn` |
 | `secret_in_output` | secrets in tool results (redacted in audit log only) | post-call result | `redact` |
 | `prompt_injection_marker` | verbatim phrases like "ignore previous instructions" in results | post-call result | `warn` |
 
@@ -107,6 +108,12 @@ and the global kill switch.
 - **Taint tracking matches exact values (plus one level of base64/hex
   decoding)**. An agent that paraphrases a secret or applies further
   encoding will not be caught.
+- **The taint store is bounded and per-session.** It holds at most
+  `max_taint_entries` values and evicts oldest-first. Once anything has been
+  evicted, a sink call that scans clean is no longer conclusive, so Agent
+  Guard reports `taint_unknown` instead of silently treating the call as
+  clean. Raise `max_taint_entries` for long sessions, or set
+  `taint_unknown: block` to fail closed.
 - **The path-traversal and SQL-injection checks are tripwires, not
   validators.** They match known-suspicious patterns in tool call args
   (encoded traversal, tautologies, etc.) and default to `warn`. They scan

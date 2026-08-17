@@ -147,13 +147,24 @@ class Pipeline:
             scan_skipped = "size_limit"
         else:
             if self.taint.is_sink(tool, self.config.taint.external_sinks.tools):
-                for match in self.taint.find_matches(text):
+                matches = self.taint.find_matches(text)
+                for match in matches:
                     detections.append({
                         "type": "taint_leak", "rule": "external_sinks",
                         "matched_source": match["source"],
                         "action": self._resolve_action("taint_leak"),
                     })
                     sensitive_values.append(match["value"])
+
+                # A clean scan is only meaningful if we still hold all the
+                # evidence. Once entries have been evicted we cannot claim the
+                # call is clean, so report the unknown rather than passing it.
+                if not matches and self.taint.truncated:
+                    detections.append({
+                        "type": "taint_unknown", "rule": "evidence_evicted",
+                        "matched": "taint store evicted entries; scan is not conclusive",
+                        "action": self._resolve_action("taint_unknown"),
+                    })
 
             for secret in find_secrets(text):
                 detections.append({

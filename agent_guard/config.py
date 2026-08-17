@@ -20,6 +20,9 @@ class ActionsConfig(BaseModel):
     secret_in_args: Action = "block"
     secret_in_output: Action = "redact"
     taint_leak: Action = "block"
+    # Taint evidence was evicted, so a clean scan on a sink call proves nothing.
+    # Fail stricter rather than silently treating the call as clean.
+    taint_unknown: Action = "warn"
     prompt_injection_marker: Action = "warn"
     # Heuristic tripwires on inbound args - warn by default (false-positive prone).
     path_traversal: Action = "warn"

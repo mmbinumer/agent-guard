@@ -11,6 +11,7 @@ actions:
   secret_in_args: block
   secret_in_output: redact     # redacted in audit log only; agent still sees raw output (see README)
   taint_leak: block
+  taint_unknown: warn            # sink call scanned clean after evidence was evicted; set to block to fail closed
   prompt_injection_marker: warn  # tripwire only, see README
   path_traversal: warn           # tripwire on inbound args (encoded ../, null bytes, /etc/passwd, etc.)
   sql_injection: warn            # tripwire on inbound args (tautologies, stacked queries, UNION SELECT)
