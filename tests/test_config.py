@@ -69,7 +69,24 @@ servers:
     assert config.limits.max_taint_entries == 1000
     assert config.kill_switch is False
     assert config.taint.sensitive_sources.files == [".env", "*secret*", "*credentials*", "id_rsa*"]
-    assert config.taint.external_sinks.tools == ["http.*", "email.*", "slack.*", "*send*"]
+    assert config.taint.external_sinks.tools == [
+        "http__*", "email__*", "slack__*", "*send*", "*post*",
+    ]
+
+
+def test_default_sinks_match_real_qualified_tool_names():
+    # Aggregated tool names use "<server>__<tool>". The shipped defaults must
+    # match that form - dot-separated patterns silently match nothing, which
+    # turns taint-leak detection into a no-op for anyone using the defaults.
+    from agent_guard.config import ExternalSinks
+    from agent_guard.detectors.taint import TaintStore
+
+    defaults = ExternalSinks().tools
+
+    assert TaintStore.is_sink("slack__post_message", defaults)
+    assert TaintStore.is_sink("http__request", defaults)
+    assert TaintStore.is_sink("email__send_mail", defaults)
+    assert not TaintStore.is_sink("fs__read_text_file", defaults)
 
 
 def test_invalid_action_value_rejected(tmp_path):

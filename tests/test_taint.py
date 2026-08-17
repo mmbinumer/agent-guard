@@ -61,8 +61,10 @@ def test_eviction_when_max_entries_exceeded():
 def test_sink_pattern_matching():
     store = TaintStore(max_value_bytes=512, max_entries=1000)
 
-    assert store.is_sink("slack.post_message", ["http.*", "email.*", "slack.*"])
-    assert not store.is_sink("fs.read_file", ["http.*", "email.*", "slack.*"])
+    # Tool names reaching the proxy are always "<server>__<tool>".
+    patterns = ["http__*", "email__*", "slack__*"]
+    assert store.is_sink("slack__post_message", patterns)
+    assert not store.is_sink("fs__read_text_file", patterns)
 
 
 def test_source_pattern_matching_uses_fnmatch():

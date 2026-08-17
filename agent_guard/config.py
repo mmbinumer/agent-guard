@@ -38,7 +38,9 @@ class SensitiveSources(BaseModel):
 
 class ExternalSinks(BaseModel):
     tools: list[str] = Field(
-        default_factory=lambda: ["http.*", "email.*", "slack.*", "*send*"]
+        # Tool names are aggregated as "<server>__<tool>", so sink patterns
+        # must use that form. Dot-separated patterns match nothing.
+        default_factory=lambda: ["http__*", "email__*", "slack__*", "*send*", "*post*"]
     )
 
 
