@@ -1,5 +1,9 @@
 # Agent Guard
 
+[![PyPI](https://img.shields.io/pypi/v/mcp-agent-guard)](https://pypi.org/project/mcp-agent-guard/)
+[![Tests](https://github.com/mmbinumer/agent-guard/actions/workflows/tests.yml/badge.svg)](https://github.com/mmbinumer/agent-guard/actions/workflows/tests.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 A runtime security proxy for MCP (Model Context Protocol) agent tool calls.
 
 Agent Guard sits between your MCP client (Claude Desktop, etc.) and your real
@@ -26,12 +30,20 @@ file lock) and rotates at 50 MB to one prior file (`audit.log.1`).
 
 ## Install
 
-Not yet published to PyPI. Install from source:
+```bash
+pip install mcp-agent-guard
+```
+
+The distribution is `mcp-agent-guard` (the shorter name belongs to an
+unrelated project); the command and the import package are both
+`agent-guard` / `agent_guard`.
+
+To work on it instead:
 
 ```bash
 git clone https://github.com/mmbinumer/agent-guard
 cd agent-guard
-pip install -e .
+pip install -e ".[dev]"
 ```
 
 > **Windows note:** if `agent-guard` isn't found after install, pip installed
