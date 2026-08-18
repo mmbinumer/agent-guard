@@ -124,6 +124,11 @@ and the global kill switch.
   `agent-guard.yaml` can disable detections or flip the kill switch. This is
   not a hardened security boundary in v1.
 
+## Security
+
+Found a way past a detection? See [SECURITY.md](SECURITY.md) for how to report
+it privately, and for what is in scope versus a known limitation.
+
 ## License
 
 MIT
