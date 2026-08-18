@@ -1,7 +1,26 @@
 [project]
-name = "agent-guard"
+# "agent-guard" on PyPI is an unrelated CrewAI monitoring library, so the
+# distribution is published as mcp-agent-guard. The import package and the
+# CLI entry point both stay `agent_guard` / `agent-guard`.
+name = "mcp-agent-guard"
 version = "0.1.0"
 description = "Runtime security proxy for MCP agent tool calls"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Muhammad Bin Umer" }]
+keywords = ["mcp", "security", "llm", "agents", "proxy", "audit"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "Topic :: Security",
+    "Topic :: Software Development :: Quality Assurance",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: OS Independent",
+]
 requires-python = ">=3.11"
 dependencies = [
     # 2.x only: proxy.py wires the lowlevel Server via the on_list_tools /
@@ -13,6 +32,12 @@ dependencies = [
     "pyyaml>=6.0",
     "click>=8.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/mmbinumer/agent-guard"
+Repository = "https://github.com/mmbinumer/agent-guard"
+Issues = "https://github.com/mmbinumer/agent-guard/issues"
+Security = "https://github.com/mmbinumer/agent-guard/blob/master/SECURITY.md"
 
 [project.scripts]
 agent-guard = "agent_guard.cli:main"
