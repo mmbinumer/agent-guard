@@ -71,14 +71,64 @@ pip install -e ".[dev]"
 
 1. Copy `agent-guard.example.yaml` to `agent-guard.yaml` and list your
    downstream MCP servers under `servers:`.
-2. Run `agent-guard run --config agent-guard.yaml` to start Agent Guard as a
-   stdio MCP proxy server, and point your MCP client (e.g. Claude Desktop) at
-   this running process instead of your servers directly.
+2. Point your MCP client at Agent Guard instead of at your servers directly -
+   see [Client compatibility](#client-compatibility) for the config shape.
+   The client starts the proxy itself; you do not need to run it by hand.
 3. Run `agent-guard tail --no-follow` to see recent activity, or
    `agent-guard report` for a summary.
 4. If a legitimate call gets blocked, set `mode: audit-only` in
    `agent-guard.yaml` to downgrade all blocks to warnings while you tune the
    config, or run `agent-guard kill` to halt everything immediately.
+
+## Client compatibility
+
+Agent Guard is not Claude-specific - it just speaks MCP. The rule is simple:
+
+> **It works with any MCP client that launches MCP servers locally.**
+
+Wherever your client lists MCP servers, list Agent Guard instead, and move
+your real servers into its YAML. The file location differs per client
+(`claude_desktop_config.json`, `.cursor/mcp.json`, and so on) but the shape
+is the same:
+
+```json
+{
+  "mcpServers": {
+    "agent-guard": {
+      "command": "agent-guard",
+      "args": ["run", "--config", "/absolute/path/to/agent-guard.yaml"]
+    }
+  }
+}
+```
+
+That covers Claude Desktop, Claude Code, Cursor, Windsurf, Cline, Continue,
+Zed, Goose, VS Code, and the OpenAI Agents SDK. The model behind the client
+is irrelevant - GPT or Claude, it is the same protocol.
+
+**Verify it is actually in the path.** Ask the client what tools it has: they
+should be prefixed with your server names (`fs__read_file`, not `read_file`).
+Then confirm calls are being recorded:
+
+```bash
+agent-guard tail --no-follow
+```
+
+Entries appearing there is the proof. This beats reading docs, since MCP
+support across these tools changes quickly.
+
+### What does not work yet
+
+Agent Guard speaks **stdio** on both sides, which rules out two setups:
+
+| Setup | Why |
+|---|---|
+| Hosted connectors (e.g. ChatGPT connectors) | The client talks to a remote server over HTTP; a local process cannot insert itself into that path. |
+| Remote downstream servers | Agent Guard can only proxy servers it launches itself, so a remote HTTP MCP server cannot sit behind it. |
+
+Both are lifted by HTTP transport support, which is on the roadmap. The
+second is the smaller change of the two - see
+[issues](https://github.com/mmbinumer/agent-guard/issues) if you want it.
 
 ## Examples
 
