@@ -110,20 +110,41 @@ async def test_build_mcp_server_wires_handlers(tmp_path):
         mcp_server = proxy._build_mcp_server()
         assert mcp_server.name == "agent-guard"
 
-        from mcp.types import ListToolsRequest, CallToolRequest
+        from mcp.types import CallToolRequestParams, PaginatedRequestParams
 
-        list_tools_handler = mcp_server.request_handlers[ListToolsRequest]
-        result = await list_tools_handler(ListToolsRequest(method="tools/list"))
-        tool_names = {t.name for t in result.root.tools}
+        # The handlers ignore the per-request context (it only carries the
+        # session and transport plumbing), so None stands in for it here.
+        list_tools_entry = mcp_server.get_request_handler("tools/list")
+        result = await list_tools_entry.handler(None, PaginatedRequestParams())
+        tool_names = {t.name for t in result.tools}
         assert "mock__echo" in tool_names
         assert "mock__read_file" in tool_names
 
-        call_tool_handler = mcp_server.request_handlers[CallToolRequest]
-        result = await call_tool_handler(
-            CallToolRequest(
-                method="tools/call",
-                params={"name": "mock__echo", "arguments": {"text": "hello"}},
-            )
+        call_tool_entry = mcp_server.get_request_handler("tools/call")
+        result = await call_tool_entry.handler(
+            None,
+            CallToolRequestParams(name="mock__echo", arguments={"text": "hello"}),
         )
-        content = result.root.content
-        assert content[0].text == "hello"
+        assert result.is_error is False
+        assert result.content[0].text == "hello"
+
+
+@pytest.mark.asyncio
+async def test_blocked_call_returns_tool_error_not_transport_error(tmp_path):
+    """A block has to reach the agent as a readable is_error result. If it
+    escaped the handler instead, the runner would turn it into a JSON-RPC
+    error and take down the agent's turn rather than telling it why."""
+    proxy, _ = make_proxy(tmp_path)
+    async with proxy.connected():
+        mcp_server = proxy._build_mcp_server()
+
+        from mcp.types import CallToolRequestParams
+
+        entry = mcp_server.get_request_handler("tools/call")
+        result = await entry.handler(
+            None,
+            CallToolRequestParams(name="mock__echo", arguments={"text": "rm -rf /"}),
+        )
+
+    assert result.is_error is True
+    assert "Blocked by Agent Guard" in result.content[0].text

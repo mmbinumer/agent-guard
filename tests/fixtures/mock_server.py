@@ -12,9 +12,7 @@ import asyncio
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp.types import TextContent, Tool
-
-app = Server("mock-server")
+from mcp.types import CallToolResult, ListToolsResult, TextContent, Tool
 
 _FILES = {
     ".env": "API_KEY=sk-leakedvalue1234567890abcdefghijkl",
@@ -22,13 +20,12 @@ _FILES = {
 }
 
 
-@app.list_tools()
-async def list_tools() -> list[Tool]:
-    return [
+async def list_tools(ctx, params) -> ListToolsResult:
+    return ListToolsResult(tools=[
         Tool(
             name="echo",
             description="Echo text back",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {"text": {"type": "string"}},
                 "required": ["text"],
@@ -37,7 +34,7 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="read_file",
             description="Read a file by path",
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {"path": {"type": "string"}},
                 "required": ["path"],
@@ -46,25 +43,29 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="multi_block",
             description="Return multiple text blocks",
-            inputSchema={"type": "object", "properties": {}},
+            input_schema={"type": "object", "properties": {}},
         ),
-    ]
+    ])
 
 
-@app.call_tool()
-async def call_tool(name: str, arguments: dict) -> list[TextContent]:
+async def call_tool(ctx, params) -> CallToolResult:
+    name = params.name
+    arguments = params.arguments or {}
     if name == "echo":
-        return [TextContent(type="text", text=arguments["text"])]
+        return CallToolResult(content=[TextContent(type="text", text=arguments["text"])])
     if name == "read_file":
         content = _FILES.get(arguments["path"], "")
-        return [TextContent(type="text", text=content)]
+        return CallToolResult(content=[TextContent(type="text", text=content)])
     if name == "multi_block":
-        return [
+        return CallToolResult(content=[
             TextContent(type="text", text="first"),
             TextContent(type="text", text="second"),
             TextContent(type="text", text="third"),
-        ]
+        ])
     raise ValueError(f"Unknown tool: {name}")
+
+
+app = Server("mock-server", on_list_tools=list_tools, on_call_tool=call_tool)
 
 
 async def main() -> None:

@@ -61,7 +61,7 @@ class AgentGuardProxy:
                 aggregated.append(Tool(
                     name=f"{server_name}__{tool.name}",
                     description=tool.description,
-                    inputSchema=tool.inputSchema,
+                    input_schema=tool.input_schema,
                 ))
         return aggregated
 
@@ -108,19 +108,29 @@ class AgentGuardProxy:
     def _build_mcp_server(self):
         """Construct an mcp.server.Server with handlers wired to this proxy's
         list_tools/call_tool, without running it."""
+        from mcp import types
         from mcp.server import Server
 
-        server = Server("agent-guard")
+        async def _list_tools(ctx, params) -> types.ListToolsResult:
+            return types.ListToolsResult(tools=await self.list_tools())
 
-        @server.list_tools()
-        async def _list_tools() -> list[Tool]:
-            return await self.list_tools()
+        async def _call_tool(ctx, params) -> types.CallToolResult:
+            try:
+                content = await self.call_tool(params.name, params.arguments or {})
+            except Exception as exc:
+                # A block (or a downstream failure) has to reach the agent as a
+                # readable tool result, not a JSON-RPC transport error that
+                # tears down its turn. mcp 1.x's @call_tool decorator wrapped
+                # handlers this way; the 2.x callback hands exceptions to the
+                # runner, which converts them to protocol errors - so the
+                # is_error result is built here instead.
+                return types.CallToolResult(
+                    content=[types.TextContent(type="text", text=str(exc))],
+                    is_error=True,
+                )
+            return types.CallToolResult(content=content)
 
-        @server.call_tool()
-        async def _call_tool(name: str, arguments: dict) -> list[TextContent]:
-            return await self.call_tool(name, arguments)
-
-        return server
+        return Server("agent-guard", on_list_tools=_list_tools, on_call_tool=_call_tool)
 
     async def serve_stdio(self) -> None:
         """Run Agent Guard as a stdio MCP server, exposing aggregated downstream
