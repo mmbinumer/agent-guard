@@ -6,27 +6,43 @@
 
 A runtime security proxy for MCP (Model Context Protocol) agent tool calls.
 
-Agent Guard sits between your MCP client (Claude Desktop, etc.) and your real
-MCP servers, inspecting every tool call for:
+Agent Guard sits between your MCP client (Claude Desktop, Claude Code, or any
+MCP-compatible client) and your real MCP servers. It checks every tool call
+before it runs and every result on the way back, then allows, warns, or
+blocks - and writes down what it did.
 
-- **Secrets in transit** - API keys, AWS credentials, private keys, tokens
-  found in tool call arguments or results (one level of base64/hex decoding
-  is checked too).
-- **Dangerous commands** - `rm -rf`, `curl | sh`, destructive SQL without a
-  `WHERE` clause, `chmod 777`, etc.
-- **Malicious inbound args** - heuristic tripwires (warn by default) for
-  path traversal (encoded `../`, null bytes, `/etc/passwd`-style targets) and
-  SQL injection (tautologies, stacked queries, `UNION SELECT`) in tool call
-  arguments. Tripwires, not guarantees - see Limitations.
-- **Accidental data exfiltration (taint tracking)** - if an agent reads a
-  sensitive file (e.g. `.env`) and a value from it later appears in a call to
-  an external-facing tool (HTTP, email, Slack), the call is blocked.
-- **Prompt injection markers** - a *tripwire*, not a defense (see
-  Limitations below).
+It looks for secrets in transit, destructive commands, malicious arguments,
+prompt-injection markers, and data from a sensitive source escaping to an
+external one. Full list under [Detections](#detections).
 
-Every tool call is logged to `~/.agent-guard/audit.log` as JSONL with a
-risk score and verdict. The log is safe for concurrent writers (cross-process
-file lock) and rotates at 50 MB to one prior file (`audit.log.1`).
+Every call is logged to `~/.agent-guard/audit.log` as JSONL with a risk score
+and verdict. The log is safe for concurrent writers (cross-process file lock)
+and rotates at 50 MB to one prior file (`audit.log.1`).
+
+## What this looks like in practice
+
+Say your agent has a wiki server and a database server connected, and you ask
+it to tidy up some onboarding docs and check today's signups:
+
+| What the agent does | Agent Guard |
+|---|---|
+| Reads a normal wiki page | **allows** it, logs it |
+| Reads a page containing "ignore previous instructions…" | **warns** - a wiki is untrusted input, anyone can edit it |
+| Edits a page, pasting in an API key it found in your config | **blocks** - the key never lands on the wiki |
+| Edits a page using a password it read from your ops runbook | **blocks** - it remembers where that value came from |
+| Runs `SELECT COUNT(*) FROM customers WHERE …` | **allows** it, logs it |
+| Runs `DELETE FROM customers` with no `WHERE` | **blocks** |
+
+Nobody had to be malicious for the two blocked edits to happen. An agent
+pulling a credential into a doc it is writing is just an agent being
+thorough - which is exactly why it goes unnoticed.
+
+Most of the time nothing fires and you get an audit trail. The value shows up
+on the one call that goes sideways.
+
+Which tools count as somewhere data can escape to is up to you: `wiki__*`
+edits are not treated as an exfiltration route by default, so add them to
+`external_sinks` if your wiki is shared. See Configuration.
 
 ## Install
 
