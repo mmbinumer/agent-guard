@@ -6,7 +6,7 @@ from agent_guard.detectors.taint import TaintStore
 from agent_guard.pipeline import Pipeline
 
 
-def make_pipeline(tmp_path, **overrides):
+def make_pipeline(tmp_path, parent_run_id=None, **overrides):
     config_dict = {
         "servers": [{"name": "fs", "command": ["x"]}],
         "mode": "enforce",
@@ -33,7 +33,10 @@ def make_pipeline(tmp_path, **overrides):
         max_value_bytes=config.limits.max_taint_value_bytes,
         max_entries=config.limits.max_taint_entries,
     )
-    pipeline = Pipeline(config=config, audit=logger, taint=taint_store, session_id="sess-1")
+    pipeline = Pipeline(
+        config=config, audit=logger, taint=taint_store, session_id="sess-1",
+        parent_run_id=parent_run_id,
+    )
     return pipeline, audit_log
 
 
@@ -278,6 +281,75 @@ def test_confirmed_leak_does_not_also_report_unknown(tmp_path):
     types = [d["type"] for d in last_call_record(audit_log)["detections"]]
     assert "taint_leak" in types
     assert "taint_unknown" not in types
+
+
+def test_post_call_records_result_hash(tmp_path):
+    # A receipt needs to reference the output without storing it, so the
+    # hash has to be of the real result text.
+    import hashlib
+
+    pipeline, audit_log = make_pipeline(tmp_path)
+    result = "the quick brown fox"
+
+    pipeline.post_call(server="fs", tool="fs.read_file", args={"path": "a.txt"}, result=result)
+
+    record = last_call_record(audit_log)
+    assert record["result_hash"] == hashlib.sha256(result.encode("utf-8")).hexdigest()
+
+
+def test_result_hash_differs_for_different_output(tmp_path):
+    pipeline, audit_log = make_pipeline(tmp_path)
+
+    pipeline.post_call(server="fs", tool="fs.read_file", args={"path": "a"}, result="one")
+    first = last_call_record(audit_log)["result_hash"]
+    pipeline.post_call(server="fs", tool="fs.read_file", args={"path": "b"}, result="two")
+    second = last_call_record(audit_log)["result_hash"]
+
+    assert first != second
+
+
+def test_pre_call_has_no_result_hash(tmp_path):
+    # There is no result yet at pre-call time; the field must not be faked.
+    pipeline, audit_log = make_pipeline(tmp_path)
+
+    pipeline.pre_call(server="fs", tool="fs.read_file", args={"path": "README.md"})
+
+    assert last_call_record(audit_log)["result_hash"] is None
+
+
+def test_parent_run_id_recorded_when_set(tmp_path):
+    # Lets several calls be chained into one run, which is what makes the
+    # audit log a receipt chain rather than isolated events.
+    pipeline, audit_log = make_pipeline(tmp_path, parent_run_id="run-42")
+
+    pipeline.pre_call(server="fs", tool="fs.read_file", args={"path": "README.md"})
+
+    assert last_call_record(audit_log)["parent_run_id"] == "run-42"
+
+
+def test_parent_run_id_is_null_when_unset(tmp_path):
+    pipeline, audit_log = make_pipeline(tmp_path)
+
+    pipeline.pre_call(server="fs", tool="fs.read_file", args={"path": "README.md"})
+
+    assert last_call_record(audit_log)["parent_run_id"] is None
+
+
+def test_result_hash_recorded_even_when_scan_skipped(tmp_path):
+    # An oversized payload skips scanning, but the receipt must still
+    # identify what came back - that is the whole point of the hash.
+    import hashlib
+
+    pipeline, audit_log = make_pipeline(tmp_path, limits={
+        "max_scan_bytes": 16, "max_taint_value_bytes": 512, "max_taint_entries": 1000,
+    })
+    result = "x" * 200
+
+    pipeline.post_call(server="fs", tool="fs.read_file", args={"path": "big.txt"}, result=result)
+
+    record = last_call_record(audit_log)
+    assert record["scan_skipped"] == "size_limit"
+    assert record["result_hash"] == hashlib.sha256(result.encode("utf-8")).hexdigest()
 
 
 def test_secret_in_output_redacted_in_log_only(tmp_path):

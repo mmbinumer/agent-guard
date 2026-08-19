@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass, field
 from typing import Any
@@ -65,11 +66,13 @@ class Pipeline:
         audit: AuditLogger,
         taint: TaintStore,
         session_id: str,
+        parent_run_id: str | None = None,
     ):
         self.config = config
         self.audit = audit
         self.taint = taint
         self.session_id = session_id
+        self.parent_run_id = parent_run_id
         self._truncation_logged = False
 
     def _resolve_action(self, detection_type: str) -> str:
@@ -83,6 +86,7 @@ class Pipeline:
         detections: list[dict],
         verdict: str,
         scan_skipped: str | None,
+        result_hash: str | None = None,
     ) -> None:
         self.audit.log(AuditEvent(
             session_id=self.session_id,
@@ -93,6 +97,8 @@ class Pipeline:
             verdict=verdict,
             risk_score=_risk_score(detections),
             scan_skipped=scan_skipped,
+            parent_run_id=self.parent_run_id,
+            result_hash=result_hash,
         ))
 
         if self.taint.truncated and not self._truncation_logged:
@@ -105,6 +111,7 @@ class Pipeline:
                 verdict="warned",
                 risk_score="medium",
                 scan_skipped=None,
+                parent_run_id=self.parent_run_id,
             ))
             self._truncation_logged = True
 
@@ -188,6 +195,10 @@ class Pipeline:
         scan_skipped = None
         secrets_found: list[str] = []
 
+        # Hashed before the size gate: an oversized result is exactly the one
+        # a receipt still needs to identify, even though we did not scan it.
+        result_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+
         if len(text.encode("utf-8")) > self.config.limits.max_scan_bytes:
             scan_skipped = "size_limit"
         else:
@@ -225,7 +236,7 @@ class Pipeline:
                     self.taint.tag(source=source_label, values=[text])
 
         verdict, _allowed = self._verdict_for(detections)
-        self._log(tool, server, "[output]", detections, verdict, scan_skipped)
+        self._log(tool, server, "[output]", detections, verdict, scan_skipped, result_hash)
 
         return PostCallDecision(result_for_agent=result, detections=detections)
 

@@ -76,9 +76,28 @@ def kill(config_path: str) -> None:
     click.echo(f"kill_switch: true written to {config_path}")
 
 
+RUN_ID_ENV_VAR = "AGENT_GUARD_RUN_ID"
+
+
+def _resolve_run_id(explicit: str | None) -> str | None:
+    """Run id from the flag, else the environment, else None.
+
+    The MCP client spawns the proxy, so an orchestrator wanting to group
+    several calls into one run usually has to go through the environment."""
+    import os
+
+    return explicit or os.environ.get(RUN_ID_ENV_VAR) or None
+
+
 @main.command()
 @click.option("--config", "config_path", default="agent-guard.yaml", show_default=True)
-def run(config_path: str) -> None:
+@click.option(
+    "--run-id",
+    "run_id",
+    default=None,
+    help=f"Group this session's calls under a run id (or set ${RUN_ID_ENV_VAR}).",
+)
+def run(config_path: str, run_id: str | None) -> None:
     """Run Agent Guard as a stdio MCP proxy server."""
     import asyncio
     import uuid
@@ -96,7 +115,13 @@ def run(config_path: str) -> None:
         max_value_bytes=config.limits.max_taint_value_bytes,
         max_entries=config.limits.max_taint_entries,
     )
-    pipeline = Pipeline(config=config, audit=logger, taint=taint_store, session_id=str(uuid.uuid4()))
+    pipeline = Pipeline(
+        config=config,
+        audit=logger,
+        taint=taint_store,
+        session_id=str(uuid.uuid4()),
+        parent_run_id=_resolve_run_id(run_id),
+    )
     proxy = AgentGuardProxy(config=config, pipeline=pipeline)
 
     async def _run():

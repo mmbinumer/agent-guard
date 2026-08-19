@@ -23,6 +23,11 @@ class AuditEvent:
     verdict: Verdict
     risk_score: RiskScore
     scan_skipped: str | None = None
+    # Receipt fields. parent_run_id chains calls belonging to one run;
+    # result_hash identifies what came back without storing it. Both are
+    # None when unavailable - an unset run, or an event with no result yet.
+    parent_run_id: str | None = None
+    result_hash: str | None = None
     ts: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 

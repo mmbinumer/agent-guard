@@ -19,6 +19,17 @@ Every call is logged to `~/.agent-guard/audit.log` as JSONL with a risk score
 and verdict. The log is safe for concurrent writers (cross-process file lock)
 and rotates at 50 MB to one prior file (`audit.log.1`).
 
+Each entry also carries a `result_hash` (sha256 of the tool's output, so a
+record can reference a result without storing it) and an optional
+`parent_run_id`, which groups the calls belonging to one run:
+
+```bash
+AGENT_GUARD_RUN_ID=run-42 agent-guard run --config agent-guard.yaml
+```
+
+Or pass `--run-id`. The environment variable is usually the practical one,
+since your MCP client is what launches the proxy.
+
 ## What this looks like in practice
 
 Say your agent has a wiki server and a database server connected, and you ask

@@ -19,6 +19,29 @@ def _write_events(audit_log_path):
     ))
 
 
+def test_run_id_prefers_explicit_flag(monkeypatch):
+    from agent_guard.cli import _resolve_run_id
+
+    monkeypatch.setenv("AGENT_GUARD_RUN_ID", "from-env")
+    assert _resolve_run_id("from-flag") == "from-flag"
+
+
+def test_run_id_falls_back_to_env(monkeypatch):
+    # The MCP client spawns the proxy, so an orchestrator's only channel is
+    # the environment.
+    from agent_guard.cli import _resolve_run_id
+
+    monkeypatch.setenv("AGENT_GUARD_RUN_ID", "run-from-env")
+    assert _resolve_run_id(None) == "run-from-env"
+
+
+def test_run_id_is_none_when_unset(monkeypatch):
+    from agent_guard.cli import _resolve_run_id
+
+    monkeypatch.delenv("AGENT_GUARD_RUN_ID", raising=False)
+    assert _resolve_run_id(None) is None
+
+
 def test_tail_prints_recent_events(tmp_path):
     audit_log = tmp_path / "audit.log"
     _write_events(audit_log)
