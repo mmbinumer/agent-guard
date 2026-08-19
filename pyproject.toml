@@ -3,7 +3,7 @@
 # distribution is published as mcp-agent-guard. The import package and the
 # CLI entry point both stay `agent_guard` / `agent-guard`.
 name = "mcp-agent-guard"
-version = "0.1.0"
+version = "0.1.1"
 description = "Runtime security proxy for MCP agent tool calls"
 readme = "README.md"
 license = "MIT"
