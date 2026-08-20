@@ -348,6 +348,20 @@ class Pipeline:
             allowed=allowed, reason=None if allowed else detections[0]["type"],
         )
 
+    def record_no_upstream_client(self, server: str, method: str) -> None:
+        """Log a server-initiated request that passed inspection but had no
+        client session to forward to, so it was refused. Rare, and worth
+        seeing: a server reaching out before the client has asked for
+        anything is itself unusual."""
+        self._log(
+            method, server, "",
+            [{
+                "type": "no_upstream_client", "rule": "server_initiated",
+                "matched": method, "action": "warn",
+            }],
+            verdict="warned", scan_skipped=None,
+        )
+
     def record_resource_listing_failure(self, server: str, error: BaseException) -> None:
         """Log a resource listing that failed for a reason other than the
         server simply not implementing resources. The proxy carries on with

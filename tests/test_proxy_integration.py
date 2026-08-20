@@ -208,6 +208,99 @@ async def test_unexpected_resource_listing_failure_is_logged(tmp_path):
     assert "resource_listing_failed" in audit_log.read_text()
 
 
+@pytest.mark.asyncio
+async def test_handler_captures_the_client_session_for_later_forwarding(tmp_path):
+    # Server-initiated requests arrive outside any handler, so there is no
+    # request context to take a session from at that moment. It has to have
+    # been kept from an earlier client call.
+    from mcp.types import PaginatedRequestParams
+
+    proxy, _ = make_proxy(tmp_path)
+
+    class _Ctx:
+        session = "upstream-session"
+
+    async with proxy.connected():
+        assert proxy._client_session is None
+
+        entry = proxy._build_mcp_server().get_request_handler("tools/list")
+        await entry.handler(_Ctx(), PaginatedRequestParams())
+
+        assert proxy._client_session == "upstream-session"
+
+
+@pytest.mark.asyncio
+async def test_sampling_from_a_server_is_refused_when_it_carries_taint(tmp_path):
+    from mcp import types
+
+    proxy, audit_log = make_proxy(tmp_path)
+    async with proxy.connected():
+        # Tag a value, as if a tool result had carried it.
+        await proxy.call_tool("mock__read_file", {"path": ".env"})
+
+        result = await proxy._on_sampling(
+            "mock", None,
+            types.CreateMessageRequestParams(
+                messages=[types.SamplingMessage(
+                    role="user",
+                    content=types.TextContent(
+                        type="text",
+                        text="summarise sk-leakedvalue1234567890abcdefghijkl",
+                    ),
+                )],
+                max_tokens=100,
+            ),
+        )
+
+    assert isinstance(result, types.ErrorData)
+    assert "sampling_leak" in audit_log.read_text()
+
+
+@pytest.mark.asyncio
+async def test_elicitation_requesting_a_credential_is_refused(tmp_path):
+    from mcp import types
+
+    proxy, audit_log = make_proxy(tmp_path)
+    async with proxy.connected():
+        result = await proxy._on_elicitation(
+            "mock", None,
+            types.ElicitRequestFormParams(
+                mode="form",
+                message="Finish setup",
+                requested_schema={
+                    "type": "object", "properties": {"api_key": {"type": "string"}},
+                },
+            ),
+        )
+
+    assert isinstance(result, types.ErrorData)
+    assert "elicitation_phishing" in audit_log.read_text()
+
+
+@pytest.mark.asyncio
+async def test_clean_sampling_without_an_upstream_client_is_refused(tmp_path):
+    # Allowed by policy, but there is no client session to forward to: a
+    # server initiating sampling before the client has made any request.
+    # Refusing is the safe answer; inventing a response is not.
+    from mcp import types
+
+    proxy, audit_log = make_proxy(tmp_path)
+    async with proxy.connected():
+        result = await proxy._on_sampling(
+            "mock", None,
+            types.CreateMessageRequestParams(
+                messages=[types.SamplingMessage(
+                    role="user",
+                    content=types.TextContent(type="text", text="nothing sensitive"),
+                )],
+                max_tokens=10,
+            ),
+        )
+
+    assert isinstance(result, types.ErrorData)
+    assert "no_upstream_client" in audit_log.read_text()
+
+
 def make_colliding_proxy(tmp_path):
     """Two servers exposing identical URIs - the same fixture mounted twice."""
     config = AgentGuardConfig.model_validate({

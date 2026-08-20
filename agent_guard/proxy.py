@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
 
@@ -39,6 +40,10 @@ class AgentGuardProxy:
         self.pipeline = pipeline
         self._servers: dict[str, _ConnectedServer] = {}
         self._resources = ResourceRouter()
+        # The upstream client's session, captured the first time a handler
+        # runs. Server-initiated requests arrive outside any handler, so
+        # there is no request context to borrow one from at that moment.
+        self._client_session = None
 
     @asynccontextmanager
     async def connected(self):
@@ -49,7 +54,15 @@ class AgentGuardProxy:
                     args=server_cfg.command[1:],
                 )
                 read, write = await stack.enter_async_context(stdio_client(params))
-                session = await stack.enter_async_context(ClientSession(read, write))
+
+                # Bound to the server name so a callback knows who called it;
+                # without these the server-initiated direction is unwatched.
+                name = server_cfg.name
+                session = await stack.enter_async_context(ClientSession(
+                    read, write,
+                    sampling_callback=functools.partial(self._on_sampling, name),
+                    elicitation_callback=functools.partial(self._on_elicitation, name),
+                ))
                 await session.initialize()
 
                 tools_result = await session.list_tools()
@@ -79,6 +92,72 @@ class AgentGuardProxy:
             finally:
                 self._servers = {}
                 self._resources = ResourceRouter()
+
+    def _remember_client_session(self, ctx) -> None:
+        session = getattr(ctx, "session", None)
+        if session is not None:
+            self._client_session = session
+
+    def _refuse(self, reason: str, detail: str):
+        from mcp import types
+
+        return types.ErrorData(code=types.INVALID_REQUEST, message=f"{reason}: {detail}")
+
+    async def _on_sampling(self, server_name: str, context, params):
+        """A downstream server asking the client's model to process something.
+
+        Outbound by nature, so it is inspected as a sink before being passed
+        up. Nothing here is forwarded until the pipeline has seen it."""
+        from mcp import types
+
+        text = " ".join(
+            getattr(m.content, "text", "") or "" for m in params.messages
+        )
+        if params.system_prompt:
+            text = f"{params.system_prompt}\n{text}"
+
+        decision = self.pipeline.check_sampling(server=server_name, text=text)
+        if not decision.allowed:
+            return self._refuse("Blocked by Agent Guard", decision.reason)
+
+        if self._client_session is None:
+            # Allowed by policy, but there is nobody to forward to. Refusing
+            # is the only honest answer: fabricating a completion would feed
+            # the server a response the client never produced.
+            self.pipeline.record_no_upstream_client(
+                server=server_name, method="sampling/createMessage",
+            )
+            return self._refuse("Agent Guard has no upstream client", "sampling")
+
+        return await self._client_session.create_message(
+            messages=params.messages,
+            max_tokens=params.max_tokens,
+            system_prompt=params.system_prompt,
+            temperature=params.temperature,
+            stop_sequences=params.stop_sequences,
+            model_preferences=params.model_preferences,
+        )
+
+    async def _on_elicitation(self, server_name: str, context, params):
+        """A downstream server asking the client to put a question to the user."""
+        schema = getattr(params, "requested_schema", None) or {}
+        fields = list((schema.get("properties") or {}).keys())
+
+        decision = self.pipeline.check_elicitation(
+            server=server_name, message=params.message or "", schema_fields=fields,
+        )
+        if not decision.allowed:
+            return self._refuse("Blocked by Agent Guard", decision.reason)
+
+        if self._client_session is None:
+            self.pipeline.record_no_upstream_client(
+                server=server_name, method="elicitation/create",
+            )
+            return self._refuse("Agent Guard has no upstream client", "elicitation")
+
+        return await self._client_session.elicit(
+            message=params.message, requested_schema=schema,
+        )
 
     async def _list_resources_safely(self, server_name: str, session) -> tuple[list, list]:
         """Resources and templates for a server, empty if it serves neither.
@@ -206,9 +285,11 @@ class AgentGuardProxy:
         from mcp.server import Server
 
         async def _list_tools(ctx, params) -> types.ListToolsResult:
+            self._remember_client_session(ctx)
             return types.ListToolsResult(tools=await self.list_tools())
 
         async def _call_tool(ctx, params) -> types.CallToolResult:
+            self._remember_client_session(ctx)
             try:
                 content = await self.call_tool(params.name, params.arguments or {})
             except Exception as exc:
@@ -225,6 +306,7 @@ class AgentGuardProxy:
             return types.CallToolResult(content=content)
 
         async def _list_resources(ctx, params) -> types.ListResourcesResult:
+            self._remember_client_session(ctx)
             return types.ListResourcesResult(resources=await self.list_resources())
 
         async def _list_resource_templates(ctx, params) -> types.ListResourceTemplatesResult:
@@ -233,6 +315,7 @@ class AgentGuardProxy:
             )
 
         async def _read_resource(ctx, params) -> types.ReadResourceResult:
+            self._remember_client_session(ctx)
             return types.ReadResourceResult(
                 contents=await self.read_resource(str(params.uri)),
             )
