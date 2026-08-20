@@ -48,10 +48,10 @@ intentional, not vulnerabilities:
 - **The config file is not tamper-proof.** Anyone who can write
   `agent-guard.yaml` can disable detections or flip the kill switch. Filesystem
   access is outside the threat model.
-- **Coverage is scoped to `tools/list` and `tools/call`.** `resources/read`,
-  prompts, and server-initiated calls (`sampling/createMessage`, `elicitation`,
-  `roots/list`) are not inspected. This is a known scope limit, tracked
-  publicly.
+- **Coverage is scoped to the client-to-server direction.** Tool calls and
+  `resources/read` are inspected. Prompts and server-initiated calls
+  (`sampling/createMessage`, `elicitation`, `roots/list`) are not. This is a
+  known scope limit, tracked publicly.
 
 If you're unsure which side of that line something falls on, report it
 privately anyway.

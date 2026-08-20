@@ -20,6 +20,9 @@ taint:
   sensitive_sources:
     files: [".env", "*secret*", "*credentials*", "id_rsa*"]
     db_tables: ["users", "customers"]
+    # Resources are identified by URI, so these need their own patterns:
+    # ".env" does not match "file:///proj/.env".
+    uris: ["*.env", "*secret*", "*credential*", "*id_rsa*", "vault:*"]
   # Tool names are exposed as "<server>__<tool>" (e.g. "slack__post_message"),
   # so sink patterns should match that form. "*send*"/"*post*" style wildcards
   # work regardless of which server they come from.

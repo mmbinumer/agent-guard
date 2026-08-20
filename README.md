@@ -8,8 +8,9 @@ A runtime security proxy for MCP (Model Context Protocol) agent tool calls.
 
 Agent Guard sits between your MCP client (Claude Desktop, Claude Code, or any
 MCP-compatible client) and your real MCP servers. It checks every tool call
-before it runs and every result on the way back, then allows, warns, or
-blocks - and writes down what it did.
+before it runs and every result on the way back - plus anything read through
+`resources/read`, the other way data reaches an agent - then allows, warns,
+or blocks, and writes down what it did.
 
 It looks for secrets in transit, destructive commands, malicious arguments,
 prompt-injection markers, and data from a sensitive source escaping to an
@@ -171,6 +172,7 @@ Each detection has a configurable action (`block` / `redact` / `warn` /
 | `taint_unknown` | a sink call scanned clean *after* taint evidence was evicted, so the result isn't conclusive | pre-call args | `warn` |
 | `secret_in_output` | secrets in tool results (redacted in audit log only) | post-call result | `redact` |
 | `prompt_injection_marker` | verbatim phrases like "ignore previous instructions" in results | post-call result | `warn` |
+| `resource_uri_collision` | two downstream servers claiming the same resource URI, logged at startup | connect | `warn` |
 
 `path_traversal`, `sql_injection`, and `prompt_injection_marker` are
 heuristic tripwires (see Limitations). They default to `warn` so they surface

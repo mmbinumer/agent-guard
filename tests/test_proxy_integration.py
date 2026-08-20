@@ -23,7 +23,7 @@ def make_proxy(tmp_path, mode="enforce"):
             "prompt_injection_marker": "warn",
         },
         "taint": {
-            "sensitive_sources": {"files": [".env"], "db_tables": []},
+            "sensitive_sources": {"files": [".env"], "db_tables": [], "uris": ["*secret*"]},
             "external_sinks": {"tools": ["mock__echo"]},
         },
         "limits": {"max_scan_bytes": 4096, "max_taint_value_bytes": 512, "max_taint_entries": 1000},
@@ -101,6 +101,130 @@ async def test_multi_block_result_preserves_all_blocks(tmp_path):
         result = await proxy.call_tool("mock__multi_block", {})
 
     assert [block.text for block in result] == ["first", "second", "third"]
+
+
+@pytest.mark.asyncio
+async def test_list_resources_aggregates(tmp_path):
+    proxy, _ = make_proxy(tmp_path)
+    async with proxy.connected():
+        resources = await proxy.list_resources()
+
+    uris = {str(r.uri) for r in resources}
+    assert "mock://docs/welcome" in uris
+
+
+@pytest.mark.asyncio
+async def test_read_resource_returns_contents(tmp_path):
+    proxy, _ = make_proxy(tmp_path)
+    async with proxy.connected():
+        contents = await proxy.read_resource("mock://docs/welcome")
+
+    assert "Welcome to the project" in contents[0].text
+
+
+@pytest.mark.asyncio
+async def test_read_resource_is_audited(tmp_path):
+    proxy, audit_log = make_proxy(tmp_path)
+    async with proxy.connected():
+        await proxy.read_resource("mock://docs/welcome")
+
+    log_text = audit_log.read_text()
+    assert "resources/read" in log_text
+    assert "mock://docs/welcome" in log_text
+
+
+@pytest.mark.asyncio
+async def test_unlisted_uri_routes_via_template(tmp_path):
+    # Not in resources/list, but matches the server's declared template.
+    proxy, _ = make_proxy(tmp_path)
+    async with proxy.connected():
+        contents = await proxy.read_resource("mock://pages/onboarding")
+
+    assert "generated page for onboarding" in contents[0].text
+
+
+@pytest.mark.asyncio
+async def test_unroutable_uri_is_refused_without_contacting_servers(tmp_path):
+    from agent_guard.resource_router import ResourceRoutingError
+
+    proxy, _ = make_proxy(tmp_path)
+    async with proxy.connected():
+        with pytest.raises(ResourceRoutingError):
+            await proxy.read_resource("unknown://nowhere/at/all")
+
+
+@pytest.mark.asyncio
+async def test_resource_taint_flows_to_sink_end_to_end(tmp_path):
+    # The whole point: a value that entered via a resource, not a tool, is
+    # still caught on the way out.
+    proxy, _ = make_proxy(tmp_path)
+    async with proxy.connected():
+        await proxy.read_resource("mock://secrets/db")
+
+        with pytest.raises(Exception):
+            await proxy.call_tool(
+                "mock__echo", {"text": "conn=postgres://user:pw-mock-31337@host/db"},
+            )
+
+
+def make_colliding_proxy(tmp_path):
+    """Two servers exposing identical URIs - the same fixture mounted twice."""
+    config = AgentGuardConfig.model_validate({
+        "servers": [
+            {"name": "a", "command": [sys.executable, "-m", "tests.fixtures.mock_server"]},
+            {"name": "b", "command": [sys.executable, "-m", "tests.fixtures.mock_server"]},
+        ],
+    })
+    audit_log = tmp_path / "audit.log"
+    pipeline = Pipeline(
+        config=config, audit=AuditLogger(audit_log),
+        taint=TaintStore(max_value_bytes=512, max_entries=1000), session_id="sess-c",
+    )
+    return AgentGuardProxy(config=config, pipeline=pipeline), audit_log
+
+
+@pytest.mark.asyncio
+async def test_uri_collision_is_logged_at_connect(tmp_path):
+    proxy, audit_log = make_colliding_proxy(tmp_path)
+    async with proxy.connected():
+        pass
+
+    log_text = audit_log.read_text()
+    assert "resource_uri_collision" in log_text
+    assert "mock://docs/welcome" in log_text
+
+
+@pytest.mark.asyncio
+async def test_colliding_uri_read_is_refused(tmp_path):
+    # Silently returning one server's copy would have the agent act on the
+    # wrong content with no signal that a choice was even made.
+    from agent_guard.resource_router import ResourceRoutingError
+
+    proxy, _ = make_colliding_proxy(tmp_path)
+    async with proxy.connected():
+        with pytest.raises(ResourceRoutingError):
+            await proxy.read_resource("mock://docs/welcome")
+
+
+@pytest.mark.asyncio
+async def test_served_mcp_server_exposes_resources(tmp_path):
+    # The in-process API is not what a real client uses; the handlers have to
+    # be wired into the served Server too.
+    proxy, _ = make_proxy(tmp_path)
+    async with proxy.connected():
+        mcp_server = proxy._build_mcp_server()
+
+        from mcp.types import PaginatedRequestParams, ReadResourceRequestParams
+
+        entry = mcp_server.get_request_handler("resources/list")
+        result = await entry.handler(None, PaginatedRequestParams())
+        assert "mock://docs/welcome" in {str(r.uri) for r in result.resources}
+
+        entry = mcp_server.get_request_handler("resources/read")
+        result = await entry.handler(
+            None, ReadResourceRequestParams(uri="mock://docs/welcome"),
+        )
+        assert "Welcome to the project" in result.contents[0].text
 
 
 @pytest.mark.asyncio

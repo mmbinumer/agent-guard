@@ -89,6 +89,19 @@ def test_default_sinks_match_real_qualified_tool_names():
     assert not TaintStore.is_sink("fs__read_text_file", defaults)
 
 
+def test_default_sensitive_uris_match_real_resource_uris():
+    # A resource identifier is a URI, so the file patterns do not apply:
+    # fnmatch(".env", "file:///proj/.env") is False.
+    from agent_guard.config import SensitiveSources
+    from agent_guard.detectors.taint import TaintStore
+
+    defaults = SensitiveSources().uris
+
+    assert TaintStore.is_sensitive_source("file:///proj/.env", defaults)
+    assert TaintStore.is_sensitive_source("vault://prod/secrets/db", defaults)
+    assert not TaintStore.is_sensitive_source("file:///proj/README.md", defaults)
+
+
 def test_invalid_action_value_rejected(tmp_path):
     config_path = tmp_path / "agent-guard.yaml"
     config_path.write_text("""

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import AsyncExitStack, asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -9,10 +9,27 @@ from mcp.types import TextContent, Tool
 
 from agent_guard.config import AgentGuardConfig
 from agent_guard.pipeline import Pipeline
+from agent_guard.resource_router import ResourceRouter
 
 
 class BlockedCallError(Exception):
     """Raised when the pipeline blocks a tool call."""
+
+
+async def _safe_list_resources(session: ClientSession) -> tuple[list, list]:
+    """Resources and templates for a server, empty if it serves neither.
+
+    `resources/*` is an optional part of MCP, so a server that doesn't
+    implement it answers with an error rather than an empty list."""
+    try:
+        resources = (await session.list_resources()).resources
+    except Exception:
+        resources = []
+    try:
+        templates = (await session.list_resource_templates()).resource_templates
+    except Exception:
+        templates = []
+    return resources, templates
 
 
 @dataclass
@@ -20,6 +37,8 @@ class _ConnectedServer:
     name: str
     session: ClientSession
     tools: list[Tool]
+    resources: list = field(default_factory=list)
+    resource_templates: list = field(default_factory=list)
 
 
 class AgentGuardProxy:
@@ -32,6 +51,7 @@ class AgentGuardProxy:
         self.config = config
         self.pipeline = pipeline
         self._servers: dict[str, _ConnectedServer] = {}
+        self._resources = ResourceRouter()
 
     @asynccontextmanager
     async def connected(self):
@@ -46,13 +66,36 @@ class AgentGuardProxy:
                 await session.initialize()
 
                 tools_result = await session.list_tools()
+
+                # Resources are optional; a server that doesn't implement them
+                # must not stop the rest of the proxy from coming up.
+                resources, templates = await _safe_list_resources(session)
+
                 self._servers[server_cfg.name] = _ConnectedServer(
-                    name=server_cfg.name, session=session, tools=tools_result.tools,
+                    name=server_cfg.name,
+                    session=session,
+                    tools=tools_result.tools,
+                    resources=resources,
+                    resource_templates=templates,
                 )
+                self._resources.register(
+                    server_cfg.name,
+                    uris=[str(r.uri) for r in resources],
+                    templates=[t.uri_template for t in templates],
+                )
+
+            self._log_resource_collisions()
             try:
                 yield self
             finally:
                 self._servers = {}
+                self._resources = ResourceRouter()
+
+    def _log_resource_collisions(self) -> None:
+        """Surface URIs claimed by more than one server at startup, so the
+        conflict is visible before a read fails."""
+        for uri, owners in self._resources.collisions.items():
+            self.pipeline.record_resource_collision(uri=uri, servers=owners)
 
     async def list_tools(self) -> list[Tool]:
         aggregated: list[Tool] = []
@@ -105,6 +148,45 @@ class AgentGuardProxy:
 
         return list(result.content)
 
+    async def list_resources(self) -> list:
+        """Resources from every downstream server, URIs unchanged.
+
+        Unlike tools these are not renamed: a URI carries scheme semantics,
+        and rewriting it would change what the client displays. Ownership is
+        tracked separately by the router."""
+        aggregated: list = []
+        for server in self._servers.values():
+            aggregated.extend(server.resources)
+        return aggregated
+
+    async def list_resource_templates(self) -> list:
+        aggregated: list = []
+        for server in self._servers.values():
+            aggregated.extend(server.resource_templates)
+        return aggregated
+
+    async def read_resource(self, uri: str) -> list:
+        # Raises rather than probing each server in turn: the URI may itself
+        # be sensitive, and asking uninvolved servers who owns it would leak
+        # that path across a boundary this proxy exists to protect.
+        server_name = self._resources.resolve(uri)
+
+        try:
+            result = await self._servers[server_name].session.read_resource(uri)
+        except Exception as exc:
+            self.pipeline.record_downstream_error(
+                server=server_name, tool=f"resources/read {uri}", error=exc,
+            )
+            raise
+
+        text_for_scan = "".join(
+            getattr(block, "text", "") or "" for block in result.contents
+        )
+        self.pipeline.post_read_resource(
+            server=server_name, uri=uri, contents=text_for_scan,
+        )
+        return list(result.contents)
+
     def _build_mcp_server(self):
         """Construct an mcp.server.Server with handlers wired to this proxy's
         list_tools/call_tool, without running it."""
@@ -130,7 +212,27 @@ class AgentGuardProxy:
                 )
             return types.CallToolResult(content=content)
 
-        return Server("agent-guard", on_list_tools=_list_tools, on_call_tool=_call_tool)
+        async def _list_resources(ctx, params) -> types.ListResourcesResult:
+            return types.ListResourcesResult(resources=await self.list_resources())
+
+        async def _list_resource_templates(ctx, params) -> types.ListResourceTemplatesResult:
+            return types.ListResourceTemplatesResult(
+                resource_templates=await self.list_resource_templates(),
+            )
+
+        async def _read_resource(ctx, params) -> types.ReadResourceResult:
+            return types.ReadResourceResult(
+                contents=await self.read_resource(str(params.uri)),
+            )
+
+        return Server(
+            "agent-guard",
+            on_list_tools=_list_tools,
+            on_call_tool=_call_tool,
+            on_list_resources=_list_resources,
+            on_list_resource_templates=_list_resource_templates,
+            on_read_resource=_read_resource,
+        )
 
     async def serve_stdio(self) -> None:
         """Run Agent Guard as a stdio MCP server, exposing aggregated downstream

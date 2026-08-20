@@ -189,8 +189,22 @@ class Pipeline:
             reason=None if allowed else detections[0]["type"],
         )
 
-    def post_call(self, server: str, tool: str, args: dict, result: Any) -> PostCallDecision:
-        text = _result_to_text(result)
+    def _inspect_incoming(
+        self,
+        server: str,
+        label: str,
+        text: str,
+        args_summary: str,
+        source_values: list[str],
+        source_patterns: list[str],
+    ) -> list[dict]:
+        """Scan data arriving from a downstream server, tag it if it came from
+        a sensitive source, and log the result.
+
+        Shared by tool results and resource reads: both are inbound data that
+        can carry a secret, an injection marker, or a value worth tainting.
+        They differ only in what identifies the source (`args` vs a URI) and
+        which patterns mark it sensitive."""
         detections: list[dict] = []
         scan_skipped = None
         secrets_found: list[str] = []
@@ -215,19 +229,11 @@ class Pipeline:
                     "matched": marker, "action": self._resolve_action("prompt_injection_marker"),
                 })
 
-        # Taint tagging: if this read came from a sensitive source, tag values.
-        # We match every string arg value against the configured source patterns
-        # so we don't depend on a tool naming the arg `path` or `table`.
-        arg_string_values = _arg_string_values(args)
-        for path_or_table in (
-            self.config.taint.sensitive_sources.files
-            + self.config.taint.sensitive_sources.db_tables
-        ):
+        for pattern in source_patterns:
             if any(
-                TaintStore.is_sensitive_source(v, [path_or_table])
-                for v in arg_string_values
+                TaintStore.is_sensitive_source(v, [pattern]) for v in source_values
             ):
-                source_label = f"{server}:{path_or_table}"
+                source_label = f"{server}:{pattern}"
                 if scan_skipped:
                     pass  # oversized: don't tag, per size-cap policy
                 elif secrets_found:
@@ -236,9 +242,61 @@ class Pipeline:
                     self.taint.tag(source=source_label, values=[text])
 
         verdict, _allowed = self._verdict_for(detections)
-        self._log(tool, server, "[output]", detections, verdict, scan_skipped, result_hash)
+        self._log(label, server, args_summary, detections, verdict, scan_skipped, result_hash)
+        return detections
 
+    def post_call(self, server: str, tool: str, args: dict, result: Any) -> PostCallDecision:
+        # Every string arg is matched against the source patterns, so we don't
+        # depend on a tool naming its argument `path` or `table`.
+        detections = self._inspect_incoming(
+            server=server,
+            label=tool,
+            text=_result_to_text(result),
+            args_summary="[output]",
+            source_values=_arg_string_values(args),
+            source_patterns=(
+                self.config.taint.sensitive_sources.files
+                + self.config.taint.sensitive_sources.db_tables
+            ),
+        )
         return PostCallDecision(result_for_agent=result, detections=detections)
+
+    def post_read_resource(
+        self, server: str, uri: str, contents: Any,
+    ) -> PostCallDecision:
+        """Inspect a resources/read result.
+
+        Without this, a value reaching the agent through a resource is never
+        tainted, so it can leave through a sink unnoticed - tool results were
+        only ever one of the two ways data arrives."""
+        text = _result_to_text(contents)
+        # A URI can itself carry a credential (a token in a query string), so
+        # the summary is redacted rather than logged verbatim.
+        safe_uri = _redact(uri, find_secrets(uri))
+        return PostCallDecision(
+            result_for_agent=contents,
+            detections=self._inspect_incoming(
+                server=server,
+                label="resources/read",
+                text=text,
+                args_summary=json.dumps({"uri": safe_uri})[:200],
+                source_values=[uri],
+                source_patterns=self.config.taint.sensitive_sources.uris,
+            ),
+        )
+
+    def record_resource_collision(self, uri: str, servers: list[str]) -> None:
+        """Log a URI claimed by several servers. Recorded at connect time so
+        the conflict is visible up front, rather than surfacing later as an
+        unexplained failed read."""
+        self._log(
+            "resources/list", ",".join(servers), json.dumps({"uri": uri})[:200],
+            [{
+                "type": "resource_uri_collision", "rule": "resource_routing",
+                "matched": uri, "action": "warn",
+            }],
+            verdict="warned", scan_skipped=None,
+        )
 
     def record_downstream_error(self, server: str, tool: str, error: BaseException) -> None:
         """Log an audit event when the downstream MCP server raises during a

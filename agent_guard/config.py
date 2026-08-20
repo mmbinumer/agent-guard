@@ -34,6 +34,13 @@ class SensitiveSources(BaseModel):
         default_factory=lambda: [".env", "*secret*", "*credentials*", "id_rsa*"]
     )
     db_tables: list[str] = Field(default_factory=list)
+    # Resources are identified by URI, so these need their own patterns: the
+    # file patterns above do not match ("...*.env" vs a bare ".env").
+    uris: list[str] = Field(
+        default_factory=lambda: [
+            "*.env", "*secret*", "*credential*", "*id_rsa*", "vault:*",
+        ]
+    )
 
 
 class ExternalSinks(BaseModel):
