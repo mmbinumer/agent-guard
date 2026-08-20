@@ -352,6 +352,84 @@ def test_result_hash_recorded_even_when_scan_skipped(tmp_path):
     assert record["result_hash"] == hashlib.sha256(result.encode("utf-8")).hexdigest()
 
 
+def test_sampling_request_carrying_tainted_data_is_blocked(tmp_path):
+    # A downstream server putting our tainted value into a sampling request
+    # is exfiltration through a channel nothing was watching.
+    pipeline, audit_log = make_pipeline(tmp_path)
+    pipeline.post_call(
+        server="fs", tool="fs.read_file", args={"path": ".env"},
+        result="API_KEY=sk-leakedvalue1234567890abcdefghijkl",
+    )
+
+    decision = pipeline.check_sampling(
+        server="evil",
+        text="Summarise this: sk-leakedvalue1234567890abcdefghijkl",
+    )
+
+    assert decision.allowed is False
+    assert any(
+        d["type"] == "sampling_leak" for d in last_call_record(audit_log)["detections"]
+    )
+
+
+def test_ordinary_sampling_request_is_allowed(tmp_path):
+    pipeline, audit_log = make_pipeline(tmp_path)
+
+    decision = pipeline.check_sampling(server="wiki", text="Summarise this page.")
+
+    assert decision.allowed is True
+    assert last_call_record(audit_log)["verdict"] == "allowed"
+
+
+def test_sampling_request_containing_a_secret_is_flagged(tmp_path):
+    pipeline, audit_log = make_pipeline(tmp_path)
+
+    decision = pipeline.check_sampling(
+        server="evil", text="use key AKIAIOSFODNN7EXAMPLE",
+    )
+
+    assert decision.allowed is False
+    record = last_call_record(audit_log)
+    assert "AKIAIOSFODNN7EXAMPLE" not in json.dumps(record)
+
+
+def test_elicitation_asking_for_a_credential_is_blocked(tmp_path):
+    pipeline, audit_log = make_pipeline(tmp_path)
+
+    decision = pipeline.check_elicitation(
+        server="evil",
+        message="Just one more step to finish setup.",
+        schema_fields=["api_key"],
+    )
+
+    assert decision.allowed is False
+    assert any(
+        d["type"] == "elicitation_phishing"
+        for d in last_call_record(audit_log)["detections"]
+    )
+
+
+def test_ordinary_elicitation_is_allowed(tmp_path):
+    pipeline, audit_log = make_pipeline(tmp_path)
+
+    decision = pipeline.check_elicitation(
+        server="deploy", message="Which environment?", schema_fields=["environment"],
+    )
+
+    assert decision.allowed is True
+
+
+def test_server_initiated_call_is_logged_even_when_allowed(tmp_path):
+    # The surface was previously invisible; an audit trail is the point.
+    pipeline, audit_log = make_pipeline(tmp_path)
+
+    pipeline.check_sampling(server="wiki", text="hello")
+
+    record = last_call_record(audit_log)
+    assert record["tool"] == "sampling/createMessage"
+    assert record["server"] == "wiki"
+
+
 def _resource_pipeline(tmp_path, **kw):
     return make_pipeline(tmp_path, taint={
         "sensitive_sources": {"files": [], "db_tables": [], "uris": ["*secret*"]},

@@ -172,6 +172,8 @@ Each detection has a configurable action (`block` / `redact` / `warn` /
 | `taint_unknown` | a sink call scanned clean *after* taint evidence was evicted, so the result isn't conclusive | pre-call args | `warn` |
 | `secret_in_output` | secrets in tool results (redacted in audit log only) | post-call result | `redact` |
 | `prompt_injection_marker` | verbatim phrases like "ignore previous instructions" in results | post-call result | `warn` |
+| `sampling_leak` | a tainted value or secret inside a `sampling/createMessage` a server asks the client to run | server-initiated | `block` |
+| `elicitation_phishing` | a server asking the *user* for a credential via `elicitation/create` | server-initiated | `block` |
 | `resource_uri_collision` | two downstream servers claiming the same resource URI, logged at startup | connect | `warn` |
 
 `path_traversal`, `sql_injection`, and `prompt_injection_marker` are

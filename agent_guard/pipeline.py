@@ -12,6 +12,7 @@ from agent_guard.detectors.dangerous import (
     find_path_traversal,
     find_sql_injection,
 )
+from agent_guard.detectors.elicitation import find_credential_requests
 from agent_guard.detectors.injection import find_injection_markers
 from agent_guard.detectors.secrets import find_secrets
 from agent_guard.detectors.taint import TaintStore
@@ -283,6 +284,68 @@ class Pipeline:
                 source_values=[uri],
                 source_patterns=self.config.taint.sensitive_sources.uris,
             ),
+        )
+
+    def check_sampling(self, server: str, text: str) -> PreCallDecision:
+        """Inspect a sampling/createMessage a downstream server is asking the
+        client to run.
+
+        This direction was previously unwatched, and it is an outbound channel:
+        whatever the server puts in the prompt leaves through the client's
+        model. A tainted value here is exfiltration, so sampling is treated as
+        a sink regardless of the configured sink patterns, which only name
+        tools."""
+        detections: list[dict] = []
+        sensitive_values: list[str] = []
+
+        for match in self.taint.find_matches(text):
+            detections.append({
+                "type": "sampling_leak", "rule": "server_initiated",
+                "matched_source": match["source"],
+                "action": self._resolve_action("sampling_leak"),
+            })
+            sensitive_values.append(match["value"])
+
+        for secret in find_secrets(text):
+            detections.append({
+                "type": "sampling_leak", "rule": "secret_patterns",
+                "matched": "[REDACTED]",
+                "action": self._resolve_action("sampling_leak"),
+            })
+            sensitive_values.append(secret)
+
+        verdict, allowed = self._verdict_for(detections)
+        self._log(
+            "sampling/createMessage", server,
+            _redact(text, sensitive_values)[:200], detections, verdict, None,
+        )
+        return PreCallDecision(
+            allowed=allowed, reason=None if allowed else detections[0]["type"],
+        )
+
+    def check_elicitation(
+        self, server: str, message: str, schema_fields: list[str],
+    ) -> PreCallDecision:
+        """Inspect an elicitation/create, where a server asks the client to put
+        a question to the user - the one surface on which a server addresses a
+        human, and so the phishing route."""
+        detections = [
+            {
+                "type": "elicitation_phishing", "rule": "credential_request",
+                "matched": match,
+                "action": self._resolve_action("elicitation_phishing"),
+            }
+            for match in find_credential_requests(message, schema_fields)
+        ]
+
+        verdict, allowed = self._verdict_for(detections)
+        self._log(
+            "elicitation/create", server,
+            json.dumps({"message": message[:120], "fields": schema_fields})[:200],
+            detections, verdict, None,
+        )
+        return PreCallDecision(
+            allowed=allowed, reason=None if allowed else detections[0]["type"],
         )
 
     def record_resource_listing_failure(self, server: str, error: BaseException) -> None:

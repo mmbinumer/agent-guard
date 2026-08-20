@@ -27,6 +27,11 @@ class ActionsConfig(BaseModel):
     # Heuristic tripwires on inbound args - warn by default (false-positive prone).
     path_traversal: Action = "warn"
     sql_injection: Action = "warn"
+    # Server-initiated calls. A sampling request is an outbound channel, so a
+    # tainted value in one is exfiltration; elicitation is the only surface
+    # where a server addresses the user, so it is the phishing route.
+    sampling_leak: Action = "block"
+    elicitation_phishing: Action = "block"
 
 
 class SensitiveSources(BaseModel):
