@@ -16,20 +16,7 @@ class BlockedCallError(Exception):
     """Raised when the pipeline blocks a tool call."""
 
 
-async def _safe_list_resources(session: ClientSession) -> tuple[list, list]:
-    """Resources and templates for a server, empty if it serves neither.
-
-    `resources/*` is an optional part of MCP, so a server that doesn't
-    implement it answers with an error rather than an empty list."""
-    try:
-        resources = (await session.list_resources()).resources
-    except Exception:
-        resources = []
-    try:
-        templates = (await session.list_resource_templates()).resource_templates
-    except Exception:
-        templates = []
-    return resources, templates
+_METHOD_NOT_FOUND = -32601
 
 
 @dataclass
@@ -69,7 +56,9 @@ class AgentGuardProxy:
 
                 # Resources are optional; a server that doesn't implement them
                 # must not stop the rest of the proxy from coming up.
-                resources, templates = await _safe_list_resources(session)
+                resources, templates = await self._list_resources_safely(
+                    server_cfg.name, session,
+                )
 
                 self._servers[server_cfg.name] = _ConnectedServer(
                     name=server_cfg.name,
@@ -90,6 +79,29 @@ class AgentGuardProxy:
             finally:
                 self._servers = {}
                 self._resources = ResourceRouter()
+
+    async def _list_resources_safely(self, server_name: str, session) -> tuple[list, list]:
+        """Resources and templates for a server, empty if it serves neither.
+
+        `resources/*` is optional in MCP, so a server that omits it answers
+        "Method not found" - expected, and passed over quietly. Any other
+        failure is logged instead of swallowed: a server that does have
+        resources would otherwise be registered with none, and later reads
+        would fail with a misleading "no server owns this URI"."""
+        async def _attempt(call, attribute):
+            try:
+                return getattr(await call(), attribute)
+            except Exception as exc:
+                if getattr(exc, "code", None) != _METHOD_NOT_FOUND:
+                    self.pipeline.record_resource_listing_failure(
+                        server=server_name, error=exc,
+                    )
+                return []
+
+        return (
+            await _attempt(session.list_resources, "resources"),
+            await _attempt(session.list_resource_templates, "resource_templates"),
+        )
 
     def _log_resource_collisions(self) -> None:
         """Surface URIs claimed by more than one server at startup, so the

@@ -167,6 +167,47 @@ async def test_resource_taint_flows_to_sink_end_to_end(tmp_path):
             )
 
 
+@pytest.mark.asyncio
+async def test_server_without_resources_is_not_an_error(tmp_path):
+    # resources/* is optional in MCP. A server that omits it answers
+    # "Method not found", which is expected, not a fault worth logging.
+    from mcp.shared.exceptions import MCPError
+
+    proxy, audit_log = make_proxy(tmp_path)
+
+    class _NoResources:
+        async def list_resources(self):
+            raise MCPError(code=-32601, message="Method not found")
+
+        async def list_resource_templates(self):
+            raise MCPError(code=-32601, message="Method not found")
+
+    resources, templates = await proxy._list_resources_safely("srv", _NoResources())
+
+    assert (resources, templates) == ([], [])
+    assert not audit_log.exists() or "resource_listing_failed" not in audit_log.read_text()
+
+
+@pytest.mark.asyncio
+async def test_unexpected_resource_listing_failure_is_logged(tmp_path):
+    # A transient failure would otherwise leave a server that does have
+    # resources registered with none, and later reads would fail with a
+    # misleading "no server owns this URI".
+    proxy, audit_log = make_proxy(tmp_path)
+
+    class _Broken:
+        async def list_resources(self):
+            raise ConnectionResetError("pipe died")
+
+        async def list_resource_templates(self):
+            raise ConnectionResetError("pipe died")
+
+    resources, templates = await proxy._list_resources_safely("srv", _Broken())
+
+    assert (resources, templates) == ([], [])
+    assert "resource_listing_failed" in audit_log.read_text()
+
+
 def make_colliding_proxy(tmp_path):
     """Two servers exposing identical URIs - the same fixture mounted twice."""
     config = AgentGuardConfig.model_validate({

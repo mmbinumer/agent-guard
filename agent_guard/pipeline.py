@@ -285,6 +285,20 @@ class Pipeline:
             ),
         )
 
+    def record_resource_listing_failure(self, server: str, error: BaseException) -> None:
+        """Log a resource listing that failed for a reason other than the
+        server simply not implementing resources. The proxy carries on with
+        no resources for it, so this is the only signal that its resources
+        are unguarded."""
+        self._log(
+            "resources/list", server, "",
+            [{
+                "type": "resource_listing_failed", "rule": "transport",
+                "matched": f"{type(error).__name__}: {error}"[:200], "action": "warn",
+            }],
+            verdict="warned", scan_skipped=None,
+        )
+
     def record_resource_collision(self, uri: str, servers: list[str]) -> None:
         """Log a URI claimed by several servers. Recorded at connect time so
         the conflict is visible up front, rather than surfacing later as an
